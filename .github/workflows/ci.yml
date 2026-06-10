@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AlexanderKiyingi/IAG_multi_backend
+          path: meta
+          sparse-checkout: |
+            shared/platform-go
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/checkout@v4
+        with:
+          path: service
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Link platform-go
+        run: |
+          mkdir -p service/shared
+          cp -r meta/shared/platform-go service/shared/platform-go
+
+      - name: Build and test
+        working-directory: service
+        run: |
+          go build ./...
+          go test ./...

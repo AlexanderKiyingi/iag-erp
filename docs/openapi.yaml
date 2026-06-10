@@ -1,0 +1,143 @@
+openapi: 3.0.3
+info:
+  title: iag-erp API
+  version: 1.0.0
+  description: HR master data and production orders for the IAG platform.
+servers:
+  - url: http://localhost:8080/api/v1/erp/api/v1
+    description: Local gateway
+  - url: http://localhost:4001/api/v1
+    description: Direct service
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: OK
+  /bootstrap:
+    get:
+      summary: HR dashboard bootstrap
+      responses:
+        "200":
+          description: Counts and pending leave
+  /employees:
+    get:
+      summary: List employees
+      parameters:
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Employee list
+    post:
+      summary: Create employee
+      responses:
+        "201":
+          description: Created
+  /employees/{employee_no}:
+    get:
+      summary: Get employee
+      parameters:
+        - in: path
+          name: employee_no
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Employee
+    patch:
+      summary: Update employee
+      responses:
+        "200":
+          description: Updated
+  /employees/by-user/{user_id}:
+    get:
+      summary: Resolve employee by iag-users UUID
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Employee
+  /employees/{employee_no}/direct-reports:
+    get:
+      summary: List direct reports
+      responses:
+        "200":
+          description: Report list
+  /leave-requests:
+    get:
+      summary: List leave requests
+      responses:
+        "200":
+          description: Leave list
+    post:
+      summary: Submit leave request
+      responses:
+        "201":
+          description: Created
+  /production-orders:
+    get:
+      summary: List production orders (MES/production sync)
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Order list
+    post:
+      summary: Create production order
+      responses:
+        "201":
+          description: Created
+  /integrations/production-orders/webhook:
+    post:
+      summary: External ERP push (upsert/delete)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [po_num]
+              properties:
+                action:
+                  type: string
+                  enum: [upsert, delete, cancel]
+                po_num:
+                  type: string
+      responses:
+        "202":
+          description: Accepted
+  /integrations/status:
+    get:
+      summary: Modules, Kafka, webhooks
+      responses:
+        "200":
+          description: Status
+  /admin/integrations/calls:
+    get:
+      summary: Integration call audit log
+      responses:
+        "200":
+          description: Call log
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
