@@ -167,7 +167,7 @@ func (a *API) GetLeaveRequest(c *gin.Context) {
 
 func (a *API) CreateLeaveRequest(c *gin.Context) {
 	var body store.CreateLeaveRequestInput
-	if err := c.ShouldBindJSON(&body); err != nil {
+	if err := bindJSONCoerced(c, &body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

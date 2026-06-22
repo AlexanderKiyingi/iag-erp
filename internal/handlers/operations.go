@@ -24,7 +24,7 @@ func (a *API) ListProductionOrders(c *gin.Context) {
 
 func (a *API) CreateProductionOrder(c *gin.Context) {
 	var body store.CreateProductionOrderInput
-	if err := c.ShouldBindJSON(&body); err != nil {
+	if err := bindJSONCoerced(c, &body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -38,7 +38,7 @@ func (a *API) CreateProductionOrder(c *gin.Context) {
 
 func (a *API) UpdateProductionOrder(c *gin.Context) {
 	var body store.UpdateProductionOrderInput
-	if err := c.ShouldBindJSON(&body); err != nil {
+	if err := bindJSONCoerced(c, &body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
