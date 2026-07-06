@@ -27,9 +27,38 @@ All requests require `Authorization: Bearer <JWT>` except `/health` and `/ready`
 | Resolve by login | `GET /employees/by-user/:user_id` |
 | Production operator link | `GET /employees/by-operator/:ref` (`OP-001` ↔ `EMP-001`) |
 | Manager hierarchy | `manager_employee_no` on create/update; `GET /employees/:employee_no/direct-reports` |
-| Leave | `GET /leave-requests`, `POST /leave-requests`, `GET .../leave-balance`, `POST .../cancel` |
+| Leave | `GET /leave-requests`, `POST /leave-requests`, `PATCH /leave-requests/:id`, `POST /leave-requests/import`, `GET .../leave-balance`, `POST .../cancel` |
 | Approve leave | `POST /leave-requests/:id/decide` (`erp.approve_leave`) |
-| Attendance | `POST /attendance/clock-in`, `POST /attendance/clock-out` |
+| Attendance | `GET /attendance`, `POST /attendance`, `POST /attendance/clock-in`, `POST /attendance/clock-out`, `DELETE /attendance/:id` |
+| Extended HR modules | `GET|POST /hr/:module`, `GET|PATCH|DELETE /hr/:module/:id`, `POST /hr/:module/import` |
+| Reports | `GET /reports?type=&department=&from=&to=` |
+| Bulk import | `POST /employees/import`, `POST /leave-requests/import`, `POST /attendance/import`, `POST /hr/:module/import` |
+
+### HR roles (iag-authentication)
+
+| Group | Permissions |
+|-------|-------------|
+| `hr-officer` | `platform.access_erp` + all `erp.view_*` / `erp.change_*` / `erp.view_hr_records` / `erp.change_hr_records` |
+| `hr-manager` | officer grant + `erp.approve_leave` + `erp.admin.read` |
+
+Assign users to `hr-officer` or `hr-manager` in auth admin. Users need a token refresh after grant changes.
+
+### HR module keys (`/hr/:module`)
+
+`shifts`, `recruitment`, `onboarding`, `performance`, `training`, `helpdesk`, `documents`, `disciplinary`, `assets`, `offboarding`, `payroll`, `settings`
+
+Records are stored as JSON documents shaped for the **HRMIAG** frontend (`camelCase` fields in `data`).
+
+### HRMIAG frontend env
+
+Copy from the HRMIAG repo `.env.example`:
+
+```env
+NEXT_PUBLIC_DATA_SOURCE=api
+NEXT_PUBLIC_GATEWAY_ORIGIN=http://localhost:8080
+NEXT_PUBLIC_AUTH_API_URL=http://localhost:8080/api/v1/authentication
+NEXT_PUBLIC_ERP_API_URL=http://localhost:8080/api/v1/erp/api/v1
+```
 
 ## Production orders
 

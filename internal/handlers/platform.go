@@ -14,6 +14,7 @@ func (a *API) Bootstrap(c *gin.Context) {
 	counts, _ := a.Store.HRCounts(ctx)
 	departments, _ := a.Store.ListDepartments(ctx, false)
 	pendingLeave, _ := a.Store.ListLeaveRequests(ctx, store.ListLeaveRequestsFilter{Status: "pending", Limit: 20})
+	moduleCounts, _ := a.Store.ModuleRecordCounts(ctx)
 
 	c.JSON(http.StatusOK, gin.H{
 		"service":         a.Cfg.ServiceName,
@@ -21,6 +22,8 @@ func (a *API) Bootstrap(c *gin.Context) {
 		"hr_counts":       counts,
 		"departments":     departments,
 		"pending_leave":   pendingLeave,
+		"module_counts":   moduleCounts,
+		"hr_modules":      store.HRModuleKeys,
 	})
 }
 

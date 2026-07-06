@@ -59,6 +59,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.GET("/employees/by-operator/:ref", appmw.RequirePermission("erp.view_employee"), api.GetEmployeeByOperatorRef)
 		v1.GET("/employees/by-user/:user_id", appmw.RequirePermission("erp.view_employee"), api.GetEmployeeByUserID)
 		v1.POST("/employees", appmw.RequirePermission("erp.change_employee"), api.CreateEmployee)
+		v1.POST("/employees/import", appmw.RequirePermission("erp.change_employee"), api.ImportEmployees)
 		v1.GET("/employees/:employee_no", appmw.RequirePermission("erp.view_employee"), api.GetEmployee)
 		v1.GET("/employees/:employee_no/direct-reports", appmw.RequirePermission("erp.view_employee"), api.ListDirectReports)
 		v1.GET("/employees/:employee_no/leave-balance", appmw.RequirePermission("erp.view_leave"), api.GetLeaveBalance)
@@ -66,15 +67,29 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 
 		v1.GET("/leave-types", appmw.RequirePermission("erp.view_leave"), api.ListLeaveTypes)
 		v1.GET("/leave-requests", appmw.RequirePermission("erp.view_leave"), api.ListLeaveRequests)
-		v1.GET("/leave-requests/:id", appmw.RequirePermission("erp.view_leave"), api.GetLeaveRequest)
 		v1.POST("/leave-requests", appmw.RequirePermission("erp.change_leave"), api.CreateLeaveRequest)
+		v1.POST("/leave-requests/import", appmw.RequirePermission("erp.change_leave"), api.ImportLeaveRequests)
+		v1.GET("/leave-requests/:id", appmw.RequirePermission("erp.view_leave"), api.GetLeaveRequest)
+		v1.PATCH("/leave-requests/:id", appmw.RequirePermission("erp.change_leave"), api.UpdateLeaveRequest)
 		v1.POST("/leave-requests/:id/decide", appmw.RequireAnyPermission("erp.approve_leave", "erp.admin.read"), api.DecideLeaveRequest)
 		v1.POST("/leave-requests/:id/cancel", appmw.RequirePermission("erp.change_leave"), api.CancelLeaveRequest)
 
 		v1.GET("/attendance", appmw.RequirePermission("erp.view_attendance"), api.ListAttendance)
 		v1.POST("/attendance", appmw.RequirePermission("erp.change_attendance"), api.UpsertAttendance)
+		v1.POST("/attendance/import", appmw.RequirePermission("erp.change_attendance"), api.ImportAttendance)
 		v1.POST("/attendance/clock-in", appmw.RequirePermission("erp.change_attendance"), api.ClockIn)
 		v1.POST("/attendance/clock-out", appmw.RequirePermission("erp.change_attendance"), api.ClockOut)
+		v1.DELETE("/attendance/:id", appmw.RequirePermission("erp.change_attendance"), api.DeleteAttendance)
+
+		hrModules := v1.Group("/hr/:module")
+		hrModules.GET("", appmw.RequirePermission("erp.view_hr_records"), api.ListHRModuleRecords)
+		hrModules.POST("", appmw.RequirePermission("erp.change_hr_records"), api.CreateHRModuleRecord)
+		hrModules.POST("/import", appmw.RequirePermission("erp.change_hr_records"), api.ImportHRModuleRecords)
+		hrModules.GET("/:id", appmw.RequirePermission("erp.view_hr_records"), api.GetHRModuleRecord)
+		hrModules.PATCH("/:id", appmw.RequirePermission("erp.change_hr_records"), api.UpdateHRModuleRecord)
+		hrModules.DELETE("/:id", appmw.RequirePermission("erp.change_hr_records"), api.DeleteHRModuleRecord)
+
+		v1.GET("/reports", appmw.RequirePermission("erp.view_hr_overview"), api.HRReport)
 
 		v1.GET("/integrations/status", appmw.RequirePermission("erp.view_hr_overview"), api.IntegrationStatus)
 		v1.POST("/integrations/production-orders/webhook", appmw.RequirePermission("erp.change_production_order"), api.ProductionOrderWebhook)

@@ -74,16 +74,18 @@ type LeaveRequest struct {
 }
 
 type AttendanceRecord struct {
-	ID         uuid.UUID  `json:"id"`
-	EmployeeID uuid.UUID  `json:"employee_id"`
-	EmployeeNo string     `json:"employee_no"`
-	EmployeeName string   `json:"employee_name"`
-	WorkDate   time.Time  `json:"work_date"`
-	ClockIn    *time.Time `json:"clock_in,omitempty"`
-	ClockOut   *time.Time `json:"clock_out,omitempty"`
-	Status     string     `json:"status"`
-	Notes      string     `json:"notes"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID           uuid.UUID  `json:"id"`
+	EmployeeID   uuid.UUID  `json:"employee_id"`
+	EmployeeNo   string     `json:"employee_no"`
+	EmployeeName string     `json:"employee_name"`
+	WorkDate     time.Time  `json:"work_date"`
+	ClockIn      *time.Time `json:"clock_in,omitempty"`
+	ClockOut     *time.Time `json:"clock_out,omitempty"`
+	Status       string     `json:"status"`
+	Location     string     `json:"location"`
+	Method       string     `json:"method"`
+	Notes        string     `json:"notes"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type HRCounts struct {
@@ -554,6 +556,70 @@ func (s *Store) CreateLeaveRequest(ctx context.Context, in CreateLeaveRequestInp
 	return s.getLeaveRequestByID(ctx, id)
 }
 
+type UpdateLeaveRequestInput struct {
+	LeaveTypeCode string  `json:"leave_type_code"`
+	StartsOn      string  `json:"starts_on"`
+	EndsOn        string  `json:"ends_on"`
+	Days          float64 `json:"days"`
+	Reason        string  `json:"reason"`
+}
+
+func (s *Store) UpdateLeaveRequest(ctx context.Context, id uuid.UUID, in UpdateLeaveRequestInput) (*LeaveRequest, error) {
+	existing, err := s.getLeaveRequestByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.Status != "pending" {
+		return nil, ErrBadInput
+	}
+	start, err1 := time.Parse("2006-01-02", in.StartsOn)
+	end, err2 := time.Parse("2006-01-02", in.EndsOn)
+	if err1 != nil || err2 != nil {
+		return nil, ErrBadInput
+	}
+	if end.Before(start) {
+		return nil, ErrBadInput
+	}
+	ltCode := strings.ToUpper(strings.TrimSpace(in.LeaveTypeCode))
+	if ltCode == "" {
+		ltCode = existing.LeaveTypeCode
+	}
+	var ltID uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM erp_leave_types WHERE code = $1`, ltCode).Scan(&ltID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrBadInput
+		}
+		return nil, err
+	}
+	days := in.Days
+	if days <= 0 {
+		days = float64(end.Sub(start).Hours()/24) + 1
+	}
+	overlap, err := s.HasOverlappingLeave(ctx, existing.EmployeeID, start, end, &id)
+	if err != nil {
+		return nil, err
+	}
+	if overlap {
+		return nil, ErrConflict
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		reason = existing.Reason
+	}
+	err = s.pool.QueryRow(ctx, `
+		UPDATE erp_leave_requests SET
+		  leave_type_id = $2, starts_on = $3, ends_on = $4, days = $5, reason = $6
+		WHERE id = $1 AND status = 'pending'
+		RETURNING id`, id, ltID, start, end, days, reason).Scan(&id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return s.getLeaveRequestByID(ctx, id)
+}
+
 func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, approverRef string) (*LeaveRequest, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
 	var status string
@@ -632,7 +698,7 @@ func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode string, 
 	}
 	q := `
 		SELECT a.id, a.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
-		       a.work_date, a.clock_in, a.clock_out, a.status, a.notes, a.created_at
+		       a.work_date, a.clock_in, a.clock_out, a.status, a.location, a.method, a.notes, a.created_at
 		FROM erp_attendance_records a
 		JOIN erp_employees e ON e.id = a.employee_id
 		WHERE 1=1`
@@ -659,7 +725,7 @@ func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode string, 
 	for rows.Next() {
 		var a AttendanceRecord
 		if err := rows.Scan(&a.ID, &a.EmployeeID, &a.EmployeeNo, &a.EmployeeName,
-			&a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.Notes, &a.CreatedAt); err != nil {
+			&a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.Location, &a.Method, &a.Notes, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -673,6 +739,8 @@ type CreateAttendanceInput struct {
 	ClockIn    string `json:"clock_in"`
 	ClockOut   string `json:"clock_out"`
 	Status     string `json:"status"`
+	Location   string `json:"location"`
+	Method     string `json:"method"`
 	Notes      string `json:"notes"`
 }
 
@@ -708,14 +776,16 @@ func (s *Store) UpsertAttendance(ctx context.Context, in CreateAttendanceInput) 
 	}
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO erp_attendance_records (employee_id, work_date, clock_in, clock_out, status, notes)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO erp_attendance_records (employee_id, work_date, clock_in, clock_out, status, location, method, notes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT (employee_id, work_date) DO UPDATE SET
 		  clock_in = COALESCE(EXCLUDED.clock_in, erp_attendance_records.clock_in),
 		  clock_out = COALESCE(EXCLUDED.clock_out, erp_attendance_records.clock_out),
 		  status = EXCLUDED.status,
+		  location = COALESCE(NULLIF(EXCLUDED.location, ''), erp_attendance_records.location),
+		  method = COALESCE(NULLIF(EXCLUDED.method, ''), erp_attendance_records.method),
 		  notes = EXCLUDED.notes
-		RETURNING id`, empID, workDate, clockIn, clockOut, status, in.Notes).Scan(&id)
+		RETURNING id`, empID, workDate, clockIn, clockOut, status, in.Location, in.Method, in.Notes).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -766,6 +836,17 @@ func (s *Store) isEmployeeOnLeaveToday(ctx context.Context, employeeNo string, d
 		    AND lr.starts_on <= $2::date AND lr.ends_on >= $2::date
 		)`, employeeNo, day).Scan(&onLeave)
 	return onLeave, err
+}
+
+func (s *Store) DeleteAttendance(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM erp_attendance_records WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func scanEmployees(rows pgx.Rows) ([]Employee, error) {

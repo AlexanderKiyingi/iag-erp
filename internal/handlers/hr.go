@@ -271,6 +271,19 @@ func (a *API) ClockOut(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+func (a *API) DeleteAttendance(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := a.Store.DeleteAttendance(c.Request.Context(), id); err != nil {
+		writeStoreError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 func (a *API) ReconcileLeaveStatuses(c *gin.Context) {
 	n, err := a.Store.ReconcileAllEmployeeLeaveStatuses(c.Request.Context())
 	if err != nil {

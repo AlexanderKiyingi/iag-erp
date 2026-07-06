@@ -15,6 +15,8 @@ func PermissionDescriptors() []PermissionDescriptor {
 		{"erp.approve_leave", "Approve or reject leave requests"},
 		{"erp.view_attendance", "View attendance records"},
 		{"erp.change_attendance", "Record or update attendance"},
+		{"erp.view_hr_records", "View extended HR module records (shifts, recruitment, etc.)"},
+		{"erp.change_hr_records", "Create or update extended HR module records"},
 		{"erp.view_production_order", "View ERP production orders"},
 		{"erp.change_production_order", "Create or update production orders"},
 		{"erp.admin.read", "View admin audit logs and monitoring"},
