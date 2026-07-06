@@ -91,6 +91,12 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 
 		v1.GET("/reports", appmw.RequirePermission("erp.view_hr_overview"), api.HRReport)
 
+		v1.GET("/worksites", appmw.RequirePermission("erp.view_hr_overview"), api.ListWorksites)
+		v1.GET("/setup-items", appmw.RequirePermission("erp.view_hr_records"), api.ListSetupItems)
+		v1.POST("/setup-items", appmw.RequirePermission("erp.change_hr_records"), api.CreateSetupItem)
+		v1.PATCH("/setup-items/:id", appmw.RequirePermission("erp.change_hr_records"), api.UpdateSetupItem)
+		v1.DELETE("/setup-items/:id", appmw.RequirePermission("erp.change_hr_records"), api.DeleteSetupItem)
+
 		v1.GET("/integrations/status", appmw.RequirePermission("erp.view_hr_overview"), api.IntegrationStatus)
 		v1.POST("/integrations/production-orders/webhook", appmw.RequirePermission("erp.change_production_order"), api.ProductionOrderWebhook)
 		v1.GET("/production-orders", api.ListProductionOrders)

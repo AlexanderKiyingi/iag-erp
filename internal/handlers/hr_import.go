@@ -36,12 +36,12 @@ func (a *API) ImportEmployees(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	n, err := a.Store.ImportEmployees(c.Request.Context(), body.Items)
-	if err != nil {
+	result, err := a.Store.ImportEmployees(c.Request.Context(), body.Items)
+	if err != nil && result.Imported == 0 {
 		writeStoreError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": n})
+	c.JSON(http.StatusOK, result)
 }
 
 func (a *API) ImportLeaveRequests(c *gin.Context) {
@@ -52,12 +52,12 @@ func (a *API) ImportLeaveRequests(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	n, err := a.Store.ImportLeaveRequests(c.Request.Context(), body.Items)
-	if err != nil {
+	result, err := a.Store.ImportLeaveRequests(c.Request.Context(), body.Items)
+	if err != nil && result.Imported == 0 {
 		writeStoreError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": n})
+	c.JSON(http.StatusOK, result)
 }
 
 func (a *API) ImportAttendance(c *gin.Context) {
@@ -68,10 +68,10 @@ func (a *API) ImportAttendance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	n, err := a.Store.ImportAttendance(c.Request.Context(), body.Items)
-	if err != nil {
+	result, err := a.Store.ImportAttendance(c.Request.Context(), body.Items)
+	if err != nil && result.Imported == 0 {
 		writeStoreError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": n})
+	c.JSON(http.StatusOK, result)
 }

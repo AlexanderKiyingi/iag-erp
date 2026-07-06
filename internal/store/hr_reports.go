@@ -16,25 +16,29 @@ type ReportResult struct {
 
 func (s *Store) HRReport(ctx context.Context, reportType, department, from, to string) (ReportResult, error) {
 	reportType = strings.ToLower(strings.TrimSpace(reportType))
+	deptCode, err := s.ResolveDepartmentFilter(ctx, department)
+	if err != nil {
+		return ReportResult{}, err
+	}
 	switch reportType {
 	case "headcount":
-		return s.reportHeadcount(ctx, department)
+		return s.reportHeadcount(ctx, deptCode)
 	case "attendance":
-		return s.reportAttendance(ctx, department, from)
+		return s.reportAttendance(ctx, deptCode, from)
 	case "leave":
-		return s.reportLeave(ctx, department, from, to)
+		return s.reportLeave(ctx, deptCode, from, to)
 	case "payroll":
-		return s.reportPayrollModule(ctx, department)
+		return s.reportPayrollModule(ctx, deptCode)
 	case "recruitment":
-		return s.reportHRModule(ctx, "recruitment", department, "stage")
+		return s.reportHRModule(ctx, "recruitment", deptCode, "stage")
 	case "performance":
-		return s.reportHRModule(ctx, "performance", department, "rating")
+		return s.reportHRModule(ctx, "performance", deptCode, "rating")
 	case "training":
-		return s.reportHRModule(ctx, "training", department, "status")
+		return s.reportHRModule(ctx, "training", deptCode, "status")
 	case "assets":
-		return s.reportHRModule(ctx, "assets", department, "condition")
+		return s.reportHRModule(ctx, "assets", deptCode, "condition")
 	case "helpdesk":
-		return s.reportHRModule(ctx, "helpdesk", department, "status")
+		return s.reportHRModule(ctx, "helpdesk", deptCode, "status")
 	default:
 		return ReportResult{}, ErrBadInput
 	}
@@ -86,7 +90,7 @@ func (s *Store) reportHeadcount(ctx context.Context, department string) (ReportR
 }
 
 func (s *Store) reportAttendance(ctx context.Context, department, workDate string) (ReportResult, error) {
-	items, err := s.ListAttendance(ctx, workDate, "", 500, 0)
+	items, err := s.ListAttendance(ctx, workDate, "", department, 500, 0)
 	if err != nil {
 		return ReportResult{}, err
 	}
@@ -116,7 +120,17 @@ func (s *Store) reportAttendance(ctx context.Context, department, workDate strin
 }
 
 func (s *Store) reportLeave(ctx context.Context, department, from, to string) (ReportResult, error) {
-	items, err := s.ListLeaveRequests(ctx, ListLeaveRequestsFilter{Limit: 500})
+	f := ListLeaveRequestsFilter{Limit: 500}
+	if department != "" {
+		f.DepartmentCode = department
+	}
+	if from != "" {
+		f.FromDate = from
+	}
+	if to != "" {
+		f.ToDate = to
+	}
+	items, err := s.ListLeaveRequests(ctx, f)
 	if err != nil {
 		return ReportResult{}, err
 	}
@@ -140,9 +154,6 @@ func (s *Store) reportLeave(ctx context.Context, department, from, to string) (R
 		}
 		totalDays += lr.Days
 	}
-	_ = department
-	_ = from
-	_ = to
 	return ReportResult{
 		Type:  "leave",
 		Title: "Leave Liability & Requests",

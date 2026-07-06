@@ -453,9 +453,13 @@ func (s *Store) ListLeaveTypes(ctx context.Context) ([]LeaveType, error) {
 }
 
 type ListLeaveRequestsFilter struct {
-	Status string
-	Limit  int
-	Offset int
+	Status         string
+	DepartmentCode string
+	PlantCode      string
+	FromDate       string
+	ToDate         string
+	Limit          int
+	Offset         int
 }
 
 func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter) ([]LeaveRequest, error) {
@@ -473,13 +477,37 @@ func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter
 		       lr.reason, lr.status, lr.approver_ref, lr.decided_at, lr.created_at
 		FROM erp_leave_requests lr
 		JOIN erp_employees e ON e.id = lr.employee_id
+		JOIN erp_departments d ON d.id = e.department_id
 		JOIN erp_leave_types lt ON lt.id = lr.leave_type_id
 		WHERE 1=1`
 	args := []any{}
+	n := 1
 	if f.Status != "" {
-		q += ` AND lr.status = $1`
+		q += ` AND lr.status = $` + itoa(n)
 		args = append(args, f.Status)
+		n++
 	}
+	if f.DepartmentCode != "" {
+		q += ` AND d.code = $` + itoa(n)
+		args = append(args, strings.ToUpper(f.DepartmentCode))
+		n++
+	}
+	if f.PlantCode != "" {
+		q += ` AND e.plant_code = $` + itoa(n)
+		args = append(args, f.PlantCode)
+		n++
+	}
+	if f.FromDate != "" {
+		q += ` AND lr.ends_on >= $` + itoa(n) + `::date`
+		args = append(args, f.FromDate)
+		n++
+	}
+	if f.ToDate != "" {
+		q += ` AND lr.starts_on <= $` + itoa(n) + `::date`
+		args = append(args, f.ToDate)
+		n++
+	}
+	_ = n
 	q += ` ORDER BY lr.created_at DESC LIMIT ` + itoa(limit) + ` OFFSET ` + itoa(offset)
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
@@ -692,7 +720,7 @@ func (s *Store) CancelLeaveRequest(ctx context.Context, id uuid.UUID) (*LeaveReq
 	return lr, nil
 }
 
-func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode string, limit, offset int) ([]AttendanceRecord, error) {
+func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode, departmentCode string, limit, offset int) ([]AttendanceRecord, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -701,6 +729,7 @@ func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode string, 
 		       a.work_date, a.clock_in, a.clock_out, a.status, a.location, a.method, a.notes, a.created_at
 		FROM erp_attendance_records a
 		JOIN erp_employees e ON e.id = a.employee_id
+		LEFT JOIN erp_departments d ON d.id = e.department_id
 		WHERE 1=1`
 	args := []any{}
 	n := 1
@@ -712,6 +741,11 @@ func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode string, 
 	if plantCode != "" {
 		q += ` AND e.plant_code = $` + itoa(n)
 		args = append(args, plantCode)
+		n++
+	}
+	if departmentCode != "" {
+		q += ` AND d.code = $` + itoa(n)
+		args = append(args, strings.ToUpper(departmentCode))
 		n++
 	}
 	_ = n
@@ -789,7 +823,7 @@ func (s *Store) UpsertAttendance(ctx context.Context, in CreateAttendanceInput) 
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.ListAttendance(ctx, in.WorkDate, "", 200, 0)
+	items, err := s.ListAttendance(ctx, in.WorkDate, "", "", 200, 0)
 	if err != nil {
 		return nil, err
 	}

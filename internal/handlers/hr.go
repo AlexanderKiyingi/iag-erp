@@ -139,10 +139,20 @@ func (a *API) ListLeaveTypes(c *gin.Context) {
 }
 
 func (a *API) ListLeaveRequests(c *gin.Context) {
-	items, err := a.Store.ListLeaveRequests(c.Request.Context(), store.ListLeaveRequestsFilter{
-		Status: c.Query("status"),
-		Limit:  queryInt(c, "limit", 50),
-		Offset: queryInt(c, "offset", 0),
+	ctx := c.Request.Context()
+	dept := c.Query("department")
+	if dept != "" {
+		if resolved, err := a.Store.ResolveDepartmentFilter(ctx, dept); err == nil {
+			dept = resolved
+		}
+	}
+	plant := store.ResolvePlantFilter(c.Query("plant"))
+	items, err := a.Store.ListLeaveRequests(ctx, store.ListLeaveRequestsFilter{
+		Status:         c.Query("status"),
+		DepartmentCode: dept,
+		PlantCode:      plant,
+		Limit:          queryInt(c, "limit", 50),
+		Offset:         queryInt(c, "offset", 0),
 	})
 	if err != nil {
 		writeStoreError(c, err)
@@ -216,7 +226,14 @@ func (a *API) CancelLeaveRequest(c *gin.Context) {
 }
 
 func (a *API) ListAttendance(c *gin.Context) {
-	items, err := a.Store.ListAttendance(c.Request.Context(), c.Query("date"), c.Query("plant"),
+	ctx := c.Request.Context()
+	dept := c.Query("department")
+	if dept != "" {
+		if resolved, err := a.Store.ResolveDepartmentFilter(ctx, dept); err == nil {
+			dept = resolved
+		}
+	}
+	items, err := a.Store.ListAttendance(ctx, c.Query("date"), store.ResolvePlantFilter(c.Query("plant")), dept,
 		queryInt(c, "limit", 50), queryInt(c, "offset", 0))
 	if err != nil {
 		writeStoreError(c, err)
