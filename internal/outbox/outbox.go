@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"log/slog"
 	"math"
 	"time"
@@ -184,3 +185,26 @@ func nullable(s string) any {
 }
 
 var ErrNotEnqueued = errors.New("outbox: publisher not configured")
+
+// EnqueueTx writes the event inside the caller's transaction, so an event
+// describing a committed change cannot fail to exist.
+//
+// Enqueue above runs on the pool, which is fine for an event that only
+// notifies. It is not fine for one carrying a financial consequence: between
+// the business commit and a separate enqueue there is a window where the change
+// is durable and the event is not, and the request context is often already
+// cancelled there because the caller has its answer.
+func (s *Store) EnqueueTx(ctx context.Context, tx pgx.Tx, topic, eventType, key string, payload any) error {
+	if s == nil || tx == nil {
+		return ErrNotEnqueued
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal outbox payload: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO erp_event_outbox (kafka_topic, event_type, event_key, payload)
+		VALUES ($1, $2, $3, $4::jsonb)
+	`, topic, eventType, nullable(key), body)
+	return err
+}

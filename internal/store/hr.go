@@ -23,18 +23,18 @@ type Department struct {
 }
 
 type Employee struct {
-	ID             uuid.UUID      `json:"id"`
-	EmployeeNo     string         `json:"employee_no"`
-	FirstName      string         `json:"first_name"`
-	LastName       string         `json:"last_name"`
-	Email          *string        `json:"email,omitempty"`
-	Phone          *string        `json:"phone,omitempty"`
-	DepartmentID   *uuid.UUID     `json:"department_id,omitempty"`
-	DepartmentCode *string        `json:"department_code,omitempty"`
-	DepartmentName *string        `json:"department_name,omitempty"`
-	JobTitle       string         `json:"job_title"`
-	EmploymentType string         `json:"employment_type"`
-	Status         string         `json:"status"`
+	ID                uuid.UUID      `json:"id"`
+	EmployeeNo        string         `json:"employee_no"`
+	FirstName         string         `json:"first_name"`
+	LastName          string         `json:"last_name"`
+	Email             *string        `json:"email,omitempty"`
+	Phone             *string        `json:"phone,omitempty"`
+	DepartmentID      *uuid.UUID     `json:"department_id,omitempty"`
+	DepartmentCode    *string        `json:"department_code,omitempty"`
+	DepartmentName    *string        `json:"department_name,omitempty"`
+	JobTitle          string         `json:"job_title"`
+	EmploymentType    string         `json:"employment_type"`
+	Status            string         `json:"status"`
 	HireDate          *time.Time     `json:"hire_date,omitempty"`
 	BirthDate         *time.Time     `json:"birth_date,omitempty"`
 	PlantCode         *string        `json:"plant_code,omitempty"`
@@ -43,8 +43,8 @@ type Employee struct {
 	ManagerID         *uuid.UUID     `json:"manager_id,omitempty"`
 	ManagerEmployeeNo *string        `json:"manager_employee_no,omitempty"`
 	Attrs             map[string]any `json:"attrs"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
 type LeaveType struct {
@@ -56,21 +56,21 @@ type LeaveType struct {
 }
 
 type LeaveRequest struct {
-	ID             uuid.UUID  `json:"id"`
-	EmployeeID     uuid.UUID  `json:"employee_id"`
-	EmployeeNo     string     `json:"employee_no"`
-	EmployeeName   string     `json:"employee_name"`
-	LeaveTypeID    uuid.UUID  `json:"leave_type_id"`
-	LeaveTypeCode  string     `json:"leave_type_code"`
-	LeaveTypeName  string     `json:"leave_type_name"`
-	StartsOn       time.Time  `json:"starts_on"`
-	EndsOn         time.Time  `json:"ends_on"`
-	Days           float64    `json:"days"`
-	Reason         string     `json:"reason"`
-	Status         string     `json:"status"`
-	ApproverRef    *string    `json:"approver_ref,omitempty"`
-	DecidedAt      *time.Time `json:"decided_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID            uuid.UUID  `json:"id"`
+	EmployeeID    uuid.UUID  `json:"employee_id"`
+	EmployeeNo    string     `json:"employee_no"`
+	EmployeeName  string     `json:"employee_name"`
+	LeaveTypeID   uuid.UUID  `json:"leave_type_id"`
+	LeaveTypeCode string     `json:"leave_type_code"`
+	LeaveTypeName string     `json:"leave_type_name"`
+	StartsOn      time.Time  `json:"starts_on"`
+	EndsOn        time.Time  `json:"ends_on"`
+	Days          float64    `json:"days"`
+	Reason        string     `json:"reason"`
+	Status        string     `json:"status"`
+	ApproverRef   *string    `json:"approver_ref,omitempty"`
+	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type AttendanceRecord struct {
@@ -89,10 +89,10 @@ type AttendanceRecord struct {
 }
 
 type HRCounts struct {
-	ActiveEmployees   int `json:"active_employees"`
-	OnLeaveEmployees  int `json:"on_leave_employees"`
-	PendingLeave      int `json:"pending_leave"`
-	Departments       int `json:"departments"`
+	ActiveEmployees  int `json:"active_employees"`
+	OnLeaveEmployees int `json:"on_leave_employees"`
+	PendingLeave     int `json:"pending_leave"`
+	Departments      int `json:"departments"`
 }
 
 func (s *Store) HRCounts(ctx context.Context) (HRCounts, error) {
@@ -528,12 +528,12 @@ func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter
 }
 
 type CreateLeaveRequestInput struct {
-	EmployeeNo     string  `json:"employee_no"`
-	LeaveTypeCode  string  `json:"leave_type_code"`
-	StartsOn       string  `json:"starts_on"`
-	EndsOn         string  `json:"ends_on"`
-	Days           float64 `json:"days"`
-	Reason         string  `json:"reason"`
+	EmployeeNo    string  `json:"employee_no"`
+	LeaveTypeCode string  `json:"leave_type_code"`
+	StartsOn      string  `json:"starts_on"`
+	EndsOn        string  `json:"ends_on"`
+	Days          float64 `json:"days"`
+	Reason        string  `json:"reason"`
 }
 
 func (s *Store) CreateLeaveRequest(ctx context.Context, in CreateLeaveRequestInput) (*LeaveRequest, error) {
@@ -667,18 +667,31 @@ func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, ap
 	}
 	defer tx.Rollback(ctx)
 
-	var employeeID uuid.UUID
+	var employeeID, leaveTypeID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		UPDATE erp_leave_requests
 		SET status = $2, approver_ref = NULLIF($3,''), decided_at = NOW()
 		WHERE id = $1 AND status = 'pending'
-		RETURNING employee_id`, id, status, approverRef).Scan(&employeeID)
+		RETURNING employee_id, leave_type_id`, id, status, approverRef).Scan(&employeeID, &leaveTypeID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+
+	// The balance and the decision that moved it commit together. Finance
+	// accrues its leave liability from this figure, so a decision that landed
+	// without its balance would leave the obligation understated with nothing
+	// to reconcile from.
+	bal, err := s.RecomputeLeaveBalanceTx(ctx, tx, employeeID, leaveTypeID, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.PublishLeaveBalanceTx(ctx, tx, bal); err != nil {
+		return nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}

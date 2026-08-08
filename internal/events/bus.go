@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"log/slog"
 	"strings"
 	"sync"
@@ -187,4 +188,20 @@ func nullableKey(s string) any {
 		return nil
 	}
 	return s
+}
+
+// PublishTx enqueues the event inside the caller's transaction and reports
+// whether it landed.
+//
+// Publish swallows the enqueue error, which suits an event that only notifies.
+// It does not suit one a ledger depends on: if the row cannot be written, the
+// caller must not commit the change the event was to announce.
+func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, eventType string, data map[string]any, key string) error {
+	if b == nil || !b.enabled || b.outbox == nil {
+		// No durable path configured (tests, or events disabled). Fall back to
+		// best effort rather than failing the business write.
+		b.Publish(ctx, eventType, data, key)
+		return nil
+	}
+	return b.outbox.EnqueueTx(ctx, tx, b.resolveTopic(eventType), eventType, key, b.newEvent(eventType, data))
 }

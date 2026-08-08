@@ -7,13 +7,31 @@ import (
 	"github.com/google/uuid"
 )
 
+// LeaveBalance is one employee's position on one leave type for one year.
+//
+// EntitledDays / UsedDays / RemainingDays are the original display fields and
+// keep their meaning for existing callers. The accrual fields beneath them are
+// what an obligation is measured from: entitlement pro-rated for service so far
+// rather than a whole year granted on the hire date, plus whatever carried over.
 type LeaveBalance struct {
-	EmployeeNo     string  `json:"employee_no"`
-	LeaveTypeCode  string  `json:"leave_type_code"`
-	Year           int     `json:"year"`
-	EntitledDays   float64 `json:"entitled_days"`
-	UsedDays       float64 `json:"used_days"`
-	RemainingDays  float64 `json:"remaining_days"`
+	EmployeeNo    string  `json:"employee_no"`
+	LeaveTypeCode string  `json:"leave_type_code"`
+	Year          int     `json:"year"`
+	EntitledDays  float64 `json:"entitled_days"`
+	UsedDays      float64 `json:"used_days"`
+	RemainingDays float64 `json:"remaining_days"`
+
+	// OpeningDays is last year's unused balance, capped by policy.
+	OpeningDays float64 `json:"opening_days"`
+	// EarnedDays is entitlement accrued to date, pro-rated for service.
+	EarnedDays float64 `json:"earned_days"`
+	// TakenDays mirrors UsedDays; both are approved days in the year.
+	TakenDays float64 `json:"taken_days"`
+	// BalanceDays is opening + earned − taken: the obligation. It differs from
+	// RemainingDays, which assumes a full year's entitlement.
+	BalanceDays float64 `json:"balance_days"`
+
+	EmployeeID uuid.UUID `json:"-"`
 }
 
 func (s *Store) ReconcileEmployeeLeaveStatus(ctx context.Context, employeeID uuid.UUID) error {

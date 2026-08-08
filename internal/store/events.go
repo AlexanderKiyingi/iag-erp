@@ -2,12 +2,23 @@ package store
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5"
 
 	"iag-erp/backend/internal/events"
 )
 
 type EventPublisher interface {
 	Publish(ctx context.Context, eventType string, data map[string]any, key string)
+}
+
+// TxEventPublisher enqueues an event inside the caller's transaction and
+// reports whether it landed. Implemented by events.Bus; asserted for rather
+// than required, so a test double supplying only Publish still works.
+//
+// It matters for events a ledger depends on: publishing after the commit leaves
+// a window where the change is durable and the event is not.
+type TxEventPublisher interface {
+	PublishTx(ctx context.Context, tx pgx.Tx, eventType string, data map[string]any, key string) error
 }
 
 func (s *Store) SetEventBus(bus EventPublisher) {
@@ -26,12 +37,12 @@ func employeeEventData(e *Employee) map[string]any {
 		return map[string]any{}
 	}
 	data := map[string]any{
-		"employee_no":      e.EmployeeNo,
-		"first_name":       e.FirstName,
-		"last_name":        e.LastName,
-		"status":           e.Status,
-		"employment_type":  e.EmploymentType,
-		"job_title":        e.JobTitle,
+		"employee_no":     e.EmployeeNo,
+		"first_name":      e.FirstName,
+		"last_name":       e.LastName,
+		"status":          e.Status,
+		"employment_type": e.EmploymentType,
+		"job_title":       e.JobTitle,
 	}
 	if e.DepartmentCode != nil {
 		data["department_code"] = *e.DepartmentCode
@@ -69,12 +80,12 @@ func (s *Store) emitLeaveEvent(ctx context.Context, eventType string, lr *LeaveR
 	}
 	s.emit(ctx, eventType, map[string]any{
 		"leave_request_id": lr.ID.String(),
-		"employee_no":        lr.EmployeeNo,
-		"leave_type_code":    lr.LeaveTypeCode,
-		"starts_on":          lr.StartsOn.Format("2006-01-02"),
-		"ends_on":            lr.EndsOn.Format("2006-01-02"),
-		"days":               lr.Days,
-		"status":             lr.Status,
+		"employee_no":      lr.EmployeeNo,
+		"leave_type_code":  lr.LeaveTypeCode,
+		"starts_on":        lr.StartsOn.Format("2006-01-02"),
+		"ends_on":          lr.EndsOn.Format("2006-01-02"),
+		"days":             lr.Days,
+		"status":           lr.Status,
 	}, lr.EmployeeNo)
 }
 
