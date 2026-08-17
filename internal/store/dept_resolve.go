@@ -20,12 +20,12 @@ func (s *Store) ResolveDepartmentFilter(ctx context.Context, input string) (stri
 	if err != nil {
 		// UI aliases used by HRMIAG
 		aliases := map[string]string{
-			"PRODUCTION":        "PROD",
-			"QUALITY CONTROL":   "QC",
-			"HUMAN RESOURCES":   "HR",
-			"HR":                "HR",
-			"LOGISTICS":         "LOG",
-			"MAINTENANCE":       "MAINT",
+			"PRODUCTION":      "PROD",
+			"QUALITY CONTROL": "QC",
+			"HUMAN RESOURCES": "HR",
+			"HR":              "HR",
+			"LOGISTICS":       "LOG",
+			"MAINTENANCE":     "MAINT",
 		}
 		if c, ok := aliases[upper]; ok {
 			return c, nil
@@ -45,9 +45,9 @@ func ResolvePlantFilter(input string) string {
 		"Africa Coffee Park · Ntungamo": "kampala",
 		"Kampala Regional Office":       "kampala",
 		"Mbarara Processing Unit":       "mbale",
-		"Entebbe Warehouse":               "kampala",
+		"Entebbe Warehouse":             "kampala",
 		"kampala":                       "kampala",
-		"mbale":                           "mbale",
+		"mbale":                         "mbale",
 	}
 	if code, ok := aliases[input]; ok {
 		return code

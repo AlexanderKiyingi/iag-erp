@@ -188,6 +188,9 @@ type ListEmployeesFilter struct {
 	Search         string
 	Limit          int
 	Offset         int
+	// RestrictToEmployeeNos is the caller's access scope. Nil means unrestricted;
+	// it is never set from a query parameter, only from AccessScope.Filter().
+	RestrictToEmployeeNos []string
 }
 
 func (s *Store) ListEmployees(ctx context.Context, f ListEmployeesFilter) ([]Employee, error) {
@@ -197,6 +200,11 @@ func (s *Store) ListEmployees(ctx context.Context, f ListEmployeesFilter) ([]Emp
 	q := `SELECT ` + employeeColumns + ` ` + employeeFrom + ` WHERE 1=1`
 	args := []any{}
 	n := 1
+	if len(f.RestrictToEmployeeNos) > 0 {
+		q += ` AND e.employee_no = ANY($` + itoa(n) + `)`
+		args = append(args, f.RestrictToEmployeeNos)
+		n++
+	}
 	if f.Status != "" {
 		q += ` AND e.status = $` + itoa(n)
 		args = append(args, f.Status)
@@ -460,6 +468,8 @@ type ListLeaveRequestsFilter struct {
 	ToDate         string
 	Limit          int
 	Offset         int
+	// RestrictToEmployeeNos is the caller's access scope — see ListEmployeesFilter.
+	RestrictToEmployeeNos []string
 }
 
 func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter) ([]LeaveRequest, error) {
@@ -477,11 +487,19 @@ func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter
 		       lr.reason, lr.status, lr.approver_ref, lr.decided_at, lr.created_at
 		FROM erp_leave_requests lr
 		JOIN erp_employees e ON e.id = lr.employee_id
-		JOIN erp_departments d ON d.id = e.department_id
+		LEFT JOIN erp_departments d ON d.id = e.department_id
 		JOIN erp_leave_types lt ON lt.id = lr.leave_type_id
 		WHERE 1=1`
 	args := []any{}
 	n := 1
+	// An inner join on department used to hide the leave of every employee who
+	// had not been assigned one — invisible in the list, invisible in the
+	// approval queue.
+	if len(f.RestrictToEmployeeNos) > 0 {
+		q += ` AND e.employee_no = ANY($` + itoa(n) + `)`
+		args = append(args, f.RestrictToEmployeeNos)
+		n++
+	}
 	if f.Status != "" {
 		q += ` AND lr.status = $` + itoa(n)
 		args = append(args, f.Status)
@@ -552,15 +570,17 @@ func (s *Store) CreateLeaveRequest(ctx context.Context, in CreateLeaveRequestInp
 		}
 		return nil, err
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT id FROM erp_leave_types WHERE code = $1`, strings.ToUpper(in.LeaveTypeCode)).Scan(&ltID); err != nil {
+	var paid bool
+	if err := s.pool.QueryRow(ctx, `SELECT id, paid FROM erp_leave_types WHERE code = $1`,
+		strings.ToUpper(in.LeaveTypeCode)).Scan(&ltID, &paid); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrBadInput
 		}
 		return nil, err
 	}
-	days := in.Days
-	if days <= 0 {
-		days = float64(end.Sub(start).Hours()/24) + 1
+	days, calendarDays, err := s.chargeableDays(ctx, start, end, in.Days)
+	if err != nil {
+		return nil, err
 	}
 	overlap, err := s.HasOverlappingLeave(ctx, empID, start, end, nil)
 	if err != nil {
@@ -569,19 +589,57 @@ func (s *Store) CreateLeaveRequest(ctx context.Context, in CreateLeaveRequestInp
 	if overlap {
 		return nil, ErrConflict
 	}
-	balance, err := s.GetLeaveBalance(ctx, in.EmployeeNo, strings.ToUpper(in.LeaveTypeCode), start.Year())
-	if err == nil && balance.RemainingDays < days {
-		return nil, ErrBadInput
+	// Unpaid leave has no entitlement to exhaust, so there is no balance to
+	// check against. Checking anyway compared the request to days_per_year = 0
+	// and rejected every unpaid request ever made — which also made the unpaid
+	// absence that payroll pro-rates pay from impossible to record.
+	if paid {
+		// A balance that cannot be read is not a balance of zero. Letting the
+		// request through on a failed lookup is how an employee ends up owed
+		// leave nobody ever accrued, so the error is returned not swallowed.
+		balance, err := s.GetLeaveBalance(ctx, in.EmployeeNo, strings.ToUpper(in.LeaveTypeCode), start.Year())
+		if err != nil {
+			return nil, err
+		}
+		if balance.BookableDays(s.LeaveCheckBasis()) < days {
+			return nil, ErrInsufficientLeave
+		}
 	}
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO erp_leave_requests (employee_id, leave_type_id, starts_on, ends_on, days, reason)
-		VALUES ($1,$2,$3,$4,$5,$6)
-		RETURNING id`, empID, ltID, start, end, days, in.Reason).Scan(&id)
+		INSERT INTO erp_leave_requests (employee_id, leave_type_id, starts_on, ends_on, days, calendar_days, reason)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		RETURNING id`, empID, ltID, start, end, days, calendarDays, in.Reason).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 	return s.getLeaveRequestByID(ctx, id)
+}
+
+// chargeableDays turns a date range into the days of entitlement it costs.
+//
+// The default is the working days in the range: weekends and public holidays
+// are not leave. A caller may request fewer — a half day, or a partial return —
+// but never more, because a request that charges days the calendar does not
+// contain is how entitlement and the liability derived from it drift apart.
+func (s *Store) chargeableDays(ctx context.Context, start, end time.Time, requested float64) (days, calendar float64, err error) {
+	working, calendar, err := s.WorkingDaysBetween(ctx, start, end)
+	if err != nil {
+		return 0, 0, err
+	}
+	// A range made entirely of weekends and holidays costs nothing and means
+	// nothing. Recording it would put a zero-day request in the approval queue
+	// and in the leave report.
+	if working <= 0 {
+		return 0, 0, ErrNoWorkingDays
+	}
+	if requested <= 0 {
+		return working, calendar, nil
+	}
+	if requested > working {
+		return 0, 0, ErrBadInput
+	}
+	return requested, calendar, nil
 }
 
 type UpdateLeaveRequestInput struct {
@@ -619,9 +677,9 @@ func (s *Store) UpdateLeaveRequest(ctx context.Context, id uuid.UUID, in UpdateL
 		}
 		return nil, err
 	}
-	days := in.Days
-	if days <= 0 {
-		days = float64(end.Sub(start).Hours()/24) + 1
+	days, calendarDays, err := s.chargeableDays(ctx, start, end, in.Days)
+	if err != nil {
+		return nil, err
 	}
 	overlap, err := s.HasOverlappingLeave(ctx, existing.EmployeeID, start, end, &id)
 	if err != nil {
@@ -636,9 +694,9 @@ func (s *Store) UpdateLeaveRequest(ctx context.Context, id uuid.UUID, in UpdateL
 	}
 	err = s.pool.QueryRow(ctx, `
 		UPDATE erp_leave_requests SET
-		  leave_type_id = $2, starts_on = $3, ends_on = $4, days = $5, reason = $6
+		  leave_type_id = $2, starts_on = $3, ends_on = $4, days = $5, calendar_days = $7, reason = $6
 		WHERE id = $1 AND status = 'pending'
-		RETURNING id`, id, ltID, start, end, days, reason).Scan(&id)
+		RETURNING id`, id, ltID, start, end, days, reason, calendarDays).Scan(&id)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
@@ -648,7 +706,13 @@ func (s *Store) UpdateLeaveRequest(ctx context.Context, id uuid.UUID, in UpdateL
 	return s.getLeaveRequestByID(ctx, id)
 }
 
-func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, approverRef string) (*LeaveRequest, error) {
+// DecideLeaveRequest approves, rejects or cancels a pending request.
+//
+// decidedByEmployeeNo is the approver as an employee, recorded alongside the
+// free-text approver_ref the frontend sends. The authority check itself belongs
+// to the caller, which knows the requester's place in the approver's tree; what
+// is recorded here is who it was, so a decision can be answered for later.
+func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, approverRef, decidedByEmployeeNo string) (*LeaveRequest, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
 	var status string
 	switch action {
@@ -670,9 +734,13 @@ func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, ap
 	var employeeID, leaveTypeID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		UPDATE erp_leave_requests
-		SET status = $2, approver_ref = NULLIF($3,''), decided_at = NOW()
+		SET status = $2, approver_ref = NULLIF($3,''), decided_at = NOW(),
+		    decided_by_employee_id = (
+		        SELECT id FROM erp_employees WHERE employee_no = NULLIF($4,'')
+		    )
 		WHERE id = $1 AND status = 'pending'
-		RETURNING employee_id, leave_type_id`, id, status, approverRef).Scan(&employeeID, &leaveTypeID)
+		RETURNING employee_id, leave_type_id`, id, status, approverRef, decidedByEmployeeNo).
+		Scan(&employeeID, &leaveTypeID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
@@ -734,6 +802,13 @@ func (s *Store) CancelLeaveRequest(ctx context.Context, id uuid.UUID) (*LeaveReq
 }
 
 func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode, departmentCode string, limit, offset int) ([]AttendanceRecord, error) {
+	return s.ListAttendanceScoped(ctx, workDate, plantCode, departmentCode, limit, offset, nil)
+}
+
+// ListAttendanceScoped is ListAttendance narrowed to an access scope. A nil
+// restriction means every employee.
+func (s *Store) ListAttendanceScoped(ctx context.Context, workDate, plantCode, departmentCode string,
+	limit, offset int, restrictToEmployeeNos []string) ([]AttendanceRecord, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -746,6 +821,11 @@ func (s *Store) ListAttendance(ctx context.Context, workDate, plantCode, departm
 		WHERE 1=1`
 	args := []any{}
 	n := 1
+	if len(restrictToEmployeeNos) > 0 {
+		q += ` AND e.employee_no = ANY($` + itoa(n) + `)`
+		args = append(args, restrictToEmployeeNos)
+		n++
+	}
 	if workDate != "" {
 		q += ` AND a.work_date = $` + itoa(n)
 		args = append(args, workDate)

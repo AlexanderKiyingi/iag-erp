@@ -32,12 +32,12 @@ type SetupItem struct {
 
 func (r SetupItem) FrontendShape() map[string]string {
 	out := map[string]string{
-		"id":     r.ID.String(),
-		"name":   r.Name,
-		"type":   r.ItemType,
-		"code":   r.Code,
-		"owner":  r.Owner,
-		"status": r.Status,
+		"id":          r.ID.String(),
+		"name":        r.Name,
+		"type":        r.ItemType,
+		"code":        r.Code,
+		"owner":       r.Owner,
+		"status":      r.Status,
 		"description": r.Description,
 	}
 	if r.EffectiveDate != nil {

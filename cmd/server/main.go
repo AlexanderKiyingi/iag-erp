@@ -58,6 +58,10 @@ func main() {
 	}
 
 	st := store.New(pool)
+	// Leave is charged in working days, so the work week decides what a leave
+	// request costs and what the resulting liability is worth.
+	st.SetWorkWeek(store.ParseWorkWeek(cfg.HRWorkWeek))
+	st.SetLeaveCheckBasis(cfg.HRLeaveCheckBasis)
 	auditStore := auditlog.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
 
@@ -108,11 +112,12 @@ func main() {
 		Topic:    cfg.KafkaNotificationsTopic,
 	})}
 	router := handlers.NewRouter(handlers.RouterDeps{
-		API:          api,
-		Audit:        auditStore,
-		PlatformAuth: platformAuth,
-		CORSOrigins:  cfg.CORSOrigins,
-		StrictRBAC:   cfg.StrictRBAC(),
+		API:            api,
+		Audit:          auditStore,
+		PlatformAuth:   platformAuth,
+		CORSOrigins:    cfg.CORSOrigins,
+		StrictRBAC:     cfg.StrictRBAC(),
+		PayrollEnabled: cfg.PayrollEnabled,
 	})
 
 	srv := &http.Server{
