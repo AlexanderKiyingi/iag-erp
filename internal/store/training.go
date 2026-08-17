@@ -157,20 +157,26 @@ const enrolmentFrom = `FROM erp_training_enrolments en
 	JOIN erp_training_courses c ON c.id = en.course_id
 	JOIN erp_employees e ON e.id = en.employee_id`
 
-func (s *Store) GetEnrolment(ctx context.Context, id uuid.UUID) (*TrainingEnrolment, error) {
+// scanEnrolment is the single reader for enrolmentColumns. It also derives
+// Expired, so no caller can read an enrolment without that being computed.
+func scanEnrolment(row pgx.Row, asOf time.Time) (*TrainingEnrolment, error) {
 	var en TrainingEnrolment
-	err := s.pool.QueryRow(ctx, `SELECT `+enrolmentColumns+` `+enrolmentFrom+` WHERE en.id = $1`, id).
-		Scan(&en.ID, &en.CourseCode, &en.CourseName, &en.EmployeeNo, &en.EmployeeName,
-			&en.Status, &en.EnrolledOn, &en.StartedOn, &en.CompletedOn, &en.Score,
-			&en.ExpiresOn, &en.CertificateRef, &en.Notes)
+	err := row.Scan(&en.ID, &en.CourseCode, &en.CourseName, &en.EmployeeNo, &en.EmployeeName,
+		&en.Status, &en.EnrolledOn, &en.StartedOn, &en.CompletedOn, &en.Score,
+		&en.ExpiresOn, &en.CertificateRef, &en.Notes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	en.Expired = enrolmentExpired(en.Status, en.ExpiresOn, time.Now().UTC())
+	en.Expired = enrolmentExpired(en.Status, en.ExpiresOn, asOf)
 	return &en, nil
+}
+
+func (s *Store) GetEnrolment(ctx context.Context, id uuid.UUID) (*TrainingEnrolment, error) {
+	return scanEnrolment(s.pool.QueryRow(ctx,
+		`SELECT `+enrolmentColumns+` `+enrolmentFrom+` WHERE en.id = $1`, id), time.Now().UTC())
 }
 
 // enrolmentExpired reports whether a completed certificate has lapsed.
@@ -235,17 +241,16 @@ func (s *Store) ListEnrolments(ctx context.Context, f ListEnrolmentsFilter) ([]T
 		return nil, err
 	}
 	defer rows.Close()
+	// One `now` for the whole page, so two rows in the same response cannot
+	// disagree about whether a certificate had expired.
 	now := time.Now().UTC()
 	out := []TrainingEnrolment{}
 	for rows.Next() {
-		var en TrainingEnrolment
-		if err := rows.Scan(&en.ID, &en.CourseCode, &en.CourseName, &en.EmployeeNo,
-			&en.EmployeeName, &en.Status, &en.EnrolledOn, &en.StartedOn, &en.CompletedOn,
-			&en.Score, &en.ExpiresOn, &en.CertificateRef, &en.Notes); err != nil {
+		en, err := scanEnrolment(rows, now)
+		if err != nil {
 			return nil, err
 		}
-		en.Expired = enrolmentExpired(en.Status, en.ExpiresOn, now)
-		out = append(out, en)
+		out = append(out, *en)
 	}
 	return out, rows.Err()
 }

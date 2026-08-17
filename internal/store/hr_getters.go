@@ -56,16 +56,26 @@ func (s *Store) ListDirectReports(ctx context.Context, employeeNo string) ([]Emp
 }
 
 func (s *Store) getLeaveRequestByID(ctx context.Context, id uuid.UUID) (*LeaveRequest, error) {
+	return scanLeaveRequest(s.pool.QueryRow(ctx,
+		`SELECT `+leaveRequestColumns+` `+leaveRequestFrom+` WHERE lr.id = $1`, id))
+}
+
+// leaveRequestColumns and scanLeaveRequest are shared with ListLeaveRequests.
+// The department join is LEFT: an inner join used to hide the leave of every
+// employee who had not been assigned a department, in the list and in the
+// approval queue alike.
+const leaveRequestColumns = `lr.id, lr.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
+	lr.leave_type_id, lt.code, lt.name, lr.starts_on, lr.ends_on, lr.days,
+	lr.reason, lr.status, lr.approver_ref, lr.decided_at, lr.created_at`
+
+const leaveRequestFrom = `FROM erp_leave_requests lr
+	JOIN erp_employees e ON e.id = lr.employee_id
+	LEFT JOIN erp_departments d ON d.id = e.department_id
+	JOIN erp_leave_types lt ON lt.id = lr.leave_type_id`
+
+func scanLeaveRequest(row pgx.Row) (*LeaveRequest, error) {
 	var lr LeaveRequest
-	err := s.pool.QueryRow(ctx, `
-		SELECT lr.id, lr.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
-		       lr.leave_type_id, lt.code, lt.name, lr.starts_on, lr.ends_on, lr.days,
-		       lr.reason, lr.status, lr.approver_ref, lr.decided_at, lr.created_at
-		FROM erp_leave_requests lr
-		JOIN erp_employees e ON e.id = lr.employee_id
-		JOIN erp_leave_types lt ON lt.id = lr.leave_type_id
-		WHERE lr.id = $1`, id).Scan(
-		&lr.ID, &lr.EmployeeID, &lr.EmployeeNo, &lr.EmployeeName,
+	err := row.Scan(&lr.ID, &lr.EmployeeID, &lr.EmployeeNo, &lr.EmployeeName,
 		&lr.LeaveTypeID, &lr.LeaveTypeCode, &lr.LeaveTypeName, &lr.StartsOn, &lr.EndsOn,
 		&lr.Days, &lr.Reason, &lr.Status, &lr.ApproverRef, &lr.DecidedAt, &lr.CreatedAt)
 	if err != nil {

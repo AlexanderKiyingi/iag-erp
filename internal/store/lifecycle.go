@@ -196,15 +196,26 @@ const checklistFrom = `FROM erp_employee_checklists cl
 	JOIN erp_employees e ON e.id = cl.employee_id
 	LEFT JOIN erp_checklist_templates t ON t.id = cl.template_id`
 
-func (s *Store) GetChecklist(ctx context.Context, id uuid.UUID) (*EmployeeChecklist, error) {
+// scanChecklist is the single reader for checklistColumns. Both the single-row
+// get and the list loop go through it, so the column list has exactly one place
+// that knows its shape.
+func scanChecklist(row pgx.Row) (*EmployeeChecklist, error) {
 	var c EmployeeChecklist
-	err := s.pool.QueryRow(ctx, `SELECT `+checklistColumns+` `+checklistFrom+` WHERE cl.id = $1`, id).
-		Scan(&c.ID, &c.EmployeeNo, &c.EmployeeName, &c.TemplateCode, &c.Kind, &c.Status,
-			&c.ReferenceDate, &c.CompletedOn, &c.Notes, &c.CreatedAt, &c.Outstanding)
+	err := row.Scan(&c.ID, &c.EmployeeNo, &c.EmployeeName, &c.TemplateCode, &c.Kind,
+		&c.Status, &c.ReferenceDate, &c.CompletedOn, &c.Notes, &c.CreatedAt, &c.Outstanding)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) GetChecklist(ctx context.Context, id uuid.UUID) (*EmployeeChecklist, error) {
+	c, err := scanChecklist(s.pool.QueryRow(ctx,
+		`SELECT `+checklistColumns+` `+checklistFrom+` WHERE cl.id = $1`, id))
+	if err != nil {
 		return nil, err
 	}
 	items, err := s.checklistItems(ctx, id)
@@ -212,7 +223,7 @@ func (s *Store) GetChecklist(ctx context.Context, id uuid.UUID) (*EmployeeCheckl
 		return nil, err
 	}
 	c.Items = items
-	return &c, nil
+	return c, nil
 }
 
 func (s *Store) ListChecklists(ctx context.Context, employeeNo, kind, status string, restrictTo []string, limit, offset int) ([]EmployeeChecklist, error) {
@@ -250,14 +261,16 @@ func (s *Store) ListChecklists(ctx context.Context, employeeNo, kind, status str
 		return nil, err
 	}
 	defer rows.Close()
+	// Items are not loaded per row: the outstanding-required count in
+	// checklistColumns is what a list needs, and the items themselves would be
+	// a query each.
 	out := []EmployeeChecklist{}
 	for rows.Next() {
-		var c EmployeeChecklist
-		if err := rows.Scan(&c.ID, &c.EmployeeNo, &c.EmployeeName, &c.TemplateCode, &c.Kind,
-			&c.Status, &c.ReferenceDate, &c.CompletedOn, &c.Notes, &c.CreatedAt, &c.Outstanding); err != nil {
+		c, err := scanChecklist(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		out = append(out, *c)
 	}
 	return out, rows.Err()
 }

@@ -437,29 +437,60 @@ func (s *Store) ListPayrollRuns(ctx context.Context, period, status string, limi
 	defer rows.Close()
 	out := []PayrollRun{}
 	for rows.Next() {
-		var r PayrollRun
-		if err := rows.Scan(&r.ID, &r.RunRef, &r.Period, &r.Status, &r.Currency, &r.EmployeeCount,
-			&r.Gross, &r.TaxableGross, &r.PAYE, &r.NSSFEmployee, &r.NSSFEmployer,
-			&r.OtherDeductions, &r.Net, &r.CreatedByEmployeeNo, &r.ApprovedByEmployeeNo,
-			&r.ApprovedAt, &r.PostedAt, &r.Notes, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		r, err := scanPayrollRun(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		out = append(out, *r)
 	}
 	return out, rows.Err()
+}
+
+// One column list and one reader for payslips. Both the run view and the
+// employee's own history select the same shape, and writing the twenty
+// destinations twice is how the two drift apart on the next column added.
+const payslipColumns = `p.id, p.run_id, r.period, p.employee_no, p.employee_name,
+	p.department_code, p.currency, p.basic, p.earned_basic, p.allowances, p.gross,
+	p.taxable_gross, p.paye, p.nssf_employee, p.nssf_employer, p.other_deductions,
+	p.total_deductions, p.net, p.working_days, p.unpaid_leave_days`
+
+const payslipFrom = `FROM erp_payslips p
+	JOIN erp_payroll_runs r ON r.id = p.run_id`
+
+func scanPayslip(row pgx.Row) (*Payslip, error) {
+	var p Payslip
+	err := row.Scan(&p.ID, &p.RunID, &p.Period, &p.EmployeeNo, &p.EmployeeName,
+		&p.DepartmentCode, &p.Currency, &p.Basic, &p.EarnedBasic, &p.Allowances,
+		&p.Gross, &p.TaxableGross, &p.PAYE, &p.NSSFEmployee, &p.NSSFEmployer,
+		&p.OtherDeductions, &p.TotalDeductions, &p.Net, &p.WorkingDays,
+		&p.UnpaidLeaveDays)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
+// withPayslipLines loads the lines for each payslip. A payslip without the
+// components that produced its net figure cannot be queried by the person it
+// belongs to, which is the only reason a payslip exists.
+func (s *Store) withPayslipLines(ctx context.Context, slips []Payslip) ([]Payslip, error) {
+	for i := range slips {
+		lines, err := s.payslipLines(ctx, slips[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		slips[i].Lines = lines
+	}
+	return slips, nil
 }
 
 // ListPayslips returns the payslips of a run, optionally narrowed to an access
 // scope so an employee reading their own payslip does not read the run.
 func (s *Store) ListPayslips(ctx context.Context, runID uuid.UUID, restrictToEmployeeNos []string) ([]Payslip, error) {
-	q := `
-		SELECT p.id, p.run_id, r.period, p.employee_no, p.employee_name, p.department_code,
-		       p.currency, p.basic, p.earned_basic, p.allowances, p.gross, p.taxable_gross,
-		       p.paye, p.nssf_employee, p.nssf_employer, p.other_deductions,
-		       p.total_deductions, p.net, p.working_days, p.unpaid_leave_days
-		FROM erp_payslips p
-		JOIN erp_payroll_runs r ON r.id = p.run_id
-		WHERE p.run_id = $1`
+	q := `SELECT ` + payslipColumns + ` ` + payslipFrom + ` WHERE p.run_id = $1`
 	args := []any{runID}
 	if len(restrictToEmployeeNos) > 0 {
 		q += ` AND p.employee_no = ANY($2)`
@@ -474,27 +505,16 @@ func (s *Store) ListPayslips(ctx context.Context, runID uuid.UUID, restrictToEmp
 	defer rows.Close()
 	out := []Payslip{}
 	for rows.Next() {
-		var p Payslip
-		if err := rows.Scan(&p.ID, &p.RunID, &p.Period, &p.EmployeeNo, &p.EmployeeName,
-			&p.DepartmentCode, &p.Currency, &p.Basic, &p.EarnedBasic, &p.Allowances,
-			&p.Gross, &p.TaxableGross, &p.PAYE, &p.NSSFEmployee, &p.NSSFEmployer,
-			&p.OtherDeductions, &p.TotalDeductions, &p.Net, &p.WorkingDays,
-			&p.UnpaidLeaveDays); err != nil {
+		p, err := scanPayslip(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		lines, err := s.payslipLines(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Lines = lines
-	}
-	return out, nil
+	return s.withPayslipLines(ctx, out)
 }
 
 // ListEmployeePayslips returns one employee's payslip history — the self-service
@@ -503,15 +523,9 @@ func (s *Store) ListEmployeePayslips(ctx context.Context, employeeNo string, lim
 	if limit <= 0 || limit > 120 {
 		limit = 24
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT p.id, p.run_id, r.period, p.employee_no, p.employee_name, p.department_code,
-		       p.currency, p.basic, p.earned_basic, p.allowances, p.gross, p.taxable_gross,
-		       p.paye, p.nssf_employee, p.nssf_employer, p.other_deductions,
-		       p.total_deductions, p.net, p.working_days, p.unpaid_leave_days
-		FROM erp_payslips p
-		JOIN erp_payroll_runs r ON r.id = p.run_id
-		-- Only posted runs: a draft is a working figure, and an employee shown
-		-- one would be reading a number that is still being changed.
+	// Only posted runs: a draft is a working figure, and an employee shown one
+	// would be reading a number that is still being changed.
+	rows, err := s.pool.Query(ctx, `SELECT `+payslipColumns+` `+payslipFrom+`
 		WHERE p.employee_no = $1 AND r.status = 'posted'
 		ORDER BY r.period DESC
 		LIMIT `+itoa(limit), employeeNo)
@@ -521,27 +535,16 @@ func (s *Store) ListEmployeePayslips(ctx context.Context, employeeNo string, lim
 	defer rows.Close()
 	out := []Payslip{}
 	for rows.Next() {
-		var p Payslip
-		if err := rows.Scan(&p.ID, &p.RunID, &p.Period, &p.EmployeeNo, &p.EmployeeName,
-			&p.DepartmentCode, &p.Currency, &p.Basic, &p.EarnedBasic, &p.Allowances,
-			&p.Gross, &p.TaxableGross, &p.PAYE, &p.NSSFEmployee, &p.NSSFEmployer,
-			&p.OtherDeductions, &p.TotalDeductions, &p.Net, &p.WorkingDays,
-			&p.UnpaidLeaveDays); err != nil {
+		p, err := scanPayslip(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		lines, err := s.payslipLines(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Lines = lines
-	}
-	return out, nil
+	return s.withPayslipLines(ctx, out)
 }
 
 func (s *Store) payslipLines(ctx context.Context, payslipID uuid.UUID) ([]PayslipLine, error) {

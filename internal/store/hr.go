@@ -481,20 +481,11 @@ func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter
 	if offset < 0 {
 		offset = 0
 	}
-	q := `
-		SELECT lr.id, lr.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
-		       lr.leave_type_id, lt.code, lt.name, lr.starts_on, lr.ends_on, lr.days,
-		       lr.reason, lr.status, lr.approver_ref, lr.decided_at, lr.created_at
-		FROM erp_leave_requests lr
-		JOIN erp_employees e ON e.id = lr.employee_id
-		LEFT JOIN erp_departments d ON d.id = e.department_id
-		JOIN erp_leave_types lt ON lt.id = lr.leave_type_id
-		WHERE 1=1`
+	// Same columns, joins and reader as getLeaveRequestByID — see the note on
+	// leaveRequestColumns for why the department join is LEFT.
+	q := `SELECT ` + leaveRequestColumns + ` ` + leaveRequestFrom + ` WHERE 1=1`
 	args := []any{}
 	n := 1
-	// An inner join on department used to hide the leave of every employee who
-	// had not been assigned one — invisible in the list, invisible in the
-	// approval queue.
 	if len(f.RestrictToEmployeeNos) > 0 {
 		q += ` AND e.employee_no = ANY($` + itoa(n) + `)`
 		args = append(args, f.RestrictToEmployeeNos)
@@ -534,13 +525,11 @@ func (s *Store) ListLeaveRequests(ctx context.Context, f ListLeaveRequestsFilter
 	defer rows.Close()
 	var out []LeaveRequest
 	for rows.Next() {
-		var lr LeaveRequest
-		if err := rows.Scan(&lr.ID, &lr.EmployeeID, &lr.EmployeeNo, &lr.EmployeeName,
-			&lr.LeaveTypeID, &lr.LeaveTypeCode, &lr.LeaveTypeName, &lr.StartsOn, &lr.EndsOn,
-			&lr.Days, &lr.Reason, &lr.Status, &lr.ApproverRef, &lr.DecidedAt, &lr.CreatedAt); err != nil {
+		lr, err := scanLeaveRequest(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, lr)
+		out = append(out, *lr)
 	}
 	return out, rows.Err()
 }
@@ -976,23 +965,14 @@ func (s *Store) DeleteAttendance(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func scanEmployees(rows pgx.Rows) ([]Employee, error) {
-	var out []Employee
-	for rows.Next() {
-		var e Employee
-		var attrs []byte
-		if err := rows.Scan(&e.ID, &e.EmployeeNo, &e.FirstName, &e.LastName, &e.Email, &e.Phone,
-			&e.DepartmentID, &e.DepartmentCode, &e.DepartmentName, &e.JobTitle, &e.EmploymentType,
-			&e.Status, &e.HireDate, &e.BirthDate, &e.PlantCode, &e.OperatorRef, &e.UserID, &e.ManagerID, &e.ManagerEmployeeNo,
-			&attrs, &e.CreatedAt, &e.UpdatedAt); err != nil {
-			return nil, err
-		}
-		e.Attrs = scanAttrs(attrs)
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
+// scanEmployeeRow is the single reader for employeeColumns.
+//
+// It used to be written twice — once here and once inside scanEmployees — so
+// the twenty-two destinations behind a six-call-site column list had to be kept
+// in step by hand. Scan is variadic, so a SELECT that gained a column and only
+// one reader that was updated is a defect no compiler and no type check sees:
+// the fields simply fill from the wrong columns, or the scan fails at runtime.
+// pgx.Rows satisfies pgx.Row, so the list read goes through this too.
 func scanEmployeeRow(row pgx.Row) (*Employee, error) {
 	var e Employee
 	var attrs []byte
@@ -1008,6 +988,18 @@ func scanEmployeeRow(row pgx.Row) (*Employee, error) {
 	}
 	e.Attrs = scanAttrs(attrs)
 	return &e, nil
+}
+
+func scanEmployees(rows pgx.Rows) ([]Employee, error) {
+	var out []Employee
+	for rows.Next() {
+		e, err := scanEmployeeRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *e)
+	}
+	return out, rows.Err()
 }
 
 func itoa(n int) string {

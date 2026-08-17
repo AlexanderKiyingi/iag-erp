@@ -177,16 +177,25 @@ const reviewFrom = `FROM erp_performance_reviews r
 	JOIN erp_employees e ON e.id = r.employee_id
 	LEFT JOIN erp_employees rv ON rv.id = r.reviewer_employee_id`
 
-func (s *Store) GetReview(ctx context.Context, id uuid.UUID) (*PerformanceReview, error) {
+// scanReview is the single reader for reviewColumns.
+func scanReview(row pgx.Row) (*PerformanceReview, error) {
 	var r PerformanceReview
-	err := s.pool.QueryRow(ctx, `SELECT `+reviewColumns+` `+reviewFrom+` WHERE r.id = $1`, id).
-		Scan(&r.ID, &r.CycleID, &r.CycleCode, &r.EmployeeNo, &r.EmployeeName, &r.ReviewerNo,
-			&r.Status, &r.OverallRating, &r.SelfComments, &r.ManagerComments,
-			&r.SubmittedAt, &r.SharedAt, &r.AcknowledgedAt, &r.CreatedAt)
+	err := row.Scan(&r.ID, &r.CycleID, &r.CycleCode, &r.EmployeeNo, &r.EmployeeName,
+		&r.ReviewerNo, &r.Status, &r.OverallRating, &r.SelfComments, &r.ManagerComments,
+		&r.SubmittedAt, &r.SharedAt, &r.AcknowledgedAt, &r.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (s *Store) GetReview(ctx context.Context, id uuid.UUID) (*PerformanceReview, error) {
+	r, err := scanReview(s.pool.QueryRow(ctx,
+		`SELECT `+reviewColumns+` `+reviewFrom+` WHERE r.id = $1`, id))
+	if err != nil {
 		return nil, err
 	}
 	ratings, err := s.reviewRatings(ctx, id)
@@ -194,7 +203,7 @@ func (s *Store) GetReview(ctx context.Context, id uuid.UUID) (*PerformanceReview
 		return nil, err
 	}
 	r.Ratings = ratings
-	return &r, nil
+	return r, nil
 }
 
 func (s *Store) ListReviews(ctx context.Context, cycleCode, employeeNo, status string, restrictTo []string, limit, offset int) ([]PerformanceReview, error) {
@@ -234,13 +243,11 @@ func (s *Store) ListReviews(ctx context.Context, cycleCode, employeeNo, status s
 	defer rows.Close()
 	out := []PerformanceReview{}
 	for rows.Next() {
-		var r PerformanceReview
-		if err := rows.Scan(&r.ID, &r.CycleID, &r.CycleCode, &r.EmployeeNo, &r.EmployeeName,
-			&r.ReviewerNo, &r.Status, &r.OverallRating, &r.SelfComments, &r.ManagerComments,
-			&r.SubmittedAt, &r.SharedAt, &r.AcknowledgedAt, &r.CreatedAt); err != nil {
+		r, err := scanReview(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		out = append(out, *r)
 	}
 	return out, rows.Err()
 }
@@ -451,11 +458,11 @@ const goalFrom = `FROM erp_performance_goals g
 	JOIN erp_employees e ON e.id = g.employee_id
 	LEFT JOIN erp_review_cycles c ON c.id = g.cycle_id`
 
-func (s *Store) GetGoal(ctx context.Context, id uuid.UUID) (*PerformanceGoal, error) {
+// scanGoal is the single reader for goalColumns.
+func scanGoal(row pgx.Row) (*PerformanceGoal, error) {
 	var g PerformanceGoal
-	err := s.pool.QueryRow(ctx, `SELECT `+goalColumns+` `+goalFrom+` WHERE g.id = $1`, id).
-		Scan(&g.ID, &g.EmployeeNo, &g.CycleCode, &g.Title, &g.Description, &g.Metric,
-			&g.Target, &g.Weight, &g.ProgressPct, &g.Status, &g.DueOn, &g.CreatedAt)
+	err := row.Scan(&g.ID, &g.EmployeeNo, &g.CycleCode, &g.Title, &g.Description,
+		&g.Metric, &g.Target, &g.Weight, &g.ProgressPct, &g.Status, &g.DueOn, &g.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -463,6 +470,11 @@ func (s *Store) GetGoal(ctx context.Context, id uuid.UUID) (*PerformanceGoal, er
 		return nil, err
 	}
 	return &g, nil
+}
+
+func (s *Store) GetGoal(ctx context.Context, id uuid.UUID) (*PerformanceGoal, error) {
+	return scanGoal(s.pool.QueryRow(ctx,
+		`SELECT `+goalColumns+` `+goalFrom+` WHERE g.id = $1`, id))
 }
 
 func (s *Store) ListGoals(ctx context.Context, employeeNo, cycleCode, status string, restrictTo []string, limit, offset int) ([]PerformanceGoal, error) {
@@ -502,13 +514,11 @@ func (s *Store) ListGoals(ctx context.Context, employeeNo, cycleCode, status str
 	defer rows.Close()
 	out := []PerformanceGoal{}
 	for rows.Next() {
-		var g PerformanceGoal
-		if err := rows.Scan(&g.ID, &g.EmployeeNo, &g.CycleCode, &g.Title, &g.Description,
-			&g.Metric, &g.Target, &g.Weight, &g.ProgressPct, &g.Status, &g.DueOn,
-			&g.CreatedAt); err != nil {
+		g, err := scanGoal(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, g)
+		out = append(out, *g)
 	}
 	return out, rows.Err()
 }

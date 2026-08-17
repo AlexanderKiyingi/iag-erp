@@ -168,16 +168,18 @@ func (s *Store) ListCases(ctx context.Context, employeeNo, status string, restri
 		return nil, err
 	}
 	defer rows.Close()
+	// Reuses scanCase rather than repeating its twenty destinations: see the
+	// note in recruitment.go on why one column list must have one reader.
+	//
+	// Events are not loaded here. A list of cases does not need each one's full
+	// history, and loading it would be a query per row.
 	out := []DisciplinaryCase{}
 	for rows.Next() {
-		var c DisciplinaryCase
-		if err := rows.Scan(&c.ID, &c.CaseNo, &c.EmployeeNo, &c.EmployeeName, &c.Category,
-			&c.Severity, &c.Status, &c.Description, &c.ReportedBy, &c.ReportedOn,
-			&c.InvestigatorNo, &c.HearingOn, &c.Outcome, &c.SanctionNotes, &c.DecidedOn,
-			&c.DecidedBy, &c.AppealDeadline, &c.ClosedOn, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		c, err := scanCase(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		out = append(out, *c)
 	}
 	return out, rows.Err()
 }

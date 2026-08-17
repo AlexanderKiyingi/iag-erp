@@ -181,16 +181,17 @@ func (s *Store) ListRequisitions(ctx context.Context, status, departmentCode str
 		return nil, err
 	}
 	defer rows.Close()
+	// The same scan helper the single-row read uses. Two hand-written scan
+	// lists for one column list is how a SELECT gains a column and one of the
+	// two readers starts filling the wrong fields — a defect no compiler sees,
+	// because Scan is variadic.
 	out := []JobRequisition{}
 	for rows.Next() {
-		var r JobRequisition
-		if err := rows.Scan(&r.ID, &r.RequisitionNo, &r.Title, &r.DepartmentCode, &r.EmploymentType,
-			&r.Headcount, &r.Status, &r.HiringManagerNo, &r.Justification, &r.TargetStartDate,
-			&r.ApprovedBy, &r.ApprovedAt, &r.OpenedOn, &r.ClosedOn, &r.FilledCount,
-			&r.CreatedAt, &r.UpdatedAt); err != nil {
+		r, err := scanRequisition(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		out = append(out, *r)
 	}
 	return out, rows.Err()
 }
@@ -359,13 +360,11 @@ func (s *Store) ListApplications(ctx context.Context, requisitionID *uuid.UUID, 
 	defer rows.Close()
 	out := []Application{}
 	for rows.Next() {
-		var a Application
-		if err := rows.Scan(&a.ID, &a.RequisitionID, &a.RequisitionNo, &a.RequisitionTitle,
-			&a.CandidateID, &a.CandidateName, &a.Stage, &a.AppliedOn, &a.StageSince,
-			&a.RejectionReason, &a.HiredEmployeeNo, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		a, err := scanApplication(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, a)
+		out = append(out, *a)
 	}
 	return out, rows.Err()
 }
