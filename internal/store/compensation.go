@@ -118,6 +118,33 @@ func (s *Store) publishRateTx(ctx context.Context, tx pgx.Tx, c Compensation) er
 	}, c.EmployeeNo)
 }
 
+// CompensationHistory returns every pay record for an employee, most recent
+// first. Effective dating is only useful if the earlier rates can be read: a
+// figure booked last quarter is explained by the rate that applied then, not by
+// the one in force today.
+func (s *Store) CompensationHistory(ctx context.Context, employeeNo string) ([]Compensation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.employee_id, c.monthly_gross, c.currency, c.working_days_per_month, c.effective_from
+		FROM erp_employee_compensation c
+		JOIN erp_employees e ON e.id = c.employee_id
+		WHERE e.employee_no = $1
+		ORDER BY c.effective_from DESC`, employeeNo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Compensation{}
+	for rows.Next() {
+		c := Compensation{EmployeeNo: employeeNo}
+		if err := rows.Scan(&c.EmployeeID, &c.MonthlyGross, &c.Currency,
+			&c.WorkingDaysPerMonth, &c.EffectiveFrom); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // CurrentCompensation returns the record in force on the given date.
 func (s *Store) CurrentCompensation(ctx context.Context, employeeNo string, asOf time.Time) (*Compensation, error) {
 	var c Compensation

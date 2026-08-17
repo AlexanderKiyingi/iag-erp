@@ -24,6 +24,13 @@ const (
 	// anyone earns, and this topic has several readers.
 	TypeEmployeeRateChanged = "erp.employee.rate_changed"
 
+	// TypePayrollRunPosted announces a payroll run that has been approved and
+	// released. It carries period totals only — gross, PAYE, NSSF, other
+	// deductions and net — which is exactly what finance needs to raise the
+	// journal, and never a per-employee figure: what any one person is paid
+	// does not belong on a topic several services read.
+	TypePayrollRunPosted = "erp.payroll.run_posted"
+
 	TypeProductionOrderCreated = "erp.production_order.created"
 	TypeProductionOrderUpdated = "erp.production_order.updated"
 	TypeProductionOrderDeleted = "erp.production_order.deleted"

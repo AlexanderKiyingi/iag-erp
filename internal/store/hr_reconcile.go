@@ -2,33 +2,53 @@ package store
 
 import (
 	"context"
+	"errors"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
-// LeaveBalance is one employee's position on one leave type for one year.
+// How a leave request is checked against a balance.
+const (
+	// LeaveBasisEntitlement allows the whole year's entitlement from 1 January.
+	// This is the historical behaviour and the default.
+	LeaveBasisEntitlement = "entitlement"
+	// LeaveBasisAccrual allows only what has been earned by the request date.
+	LeaveBasisAccrual = "accrual"
+)
+
+// LeaveBalance is one employee's position on one leave type for one year,
+// stated on both of the two bases that exist.
 //
-// EntitledDays / UsedDays / RemainingDays are the original display fields and
-// keep their meaning for existing callers. The accrual fields beneath them are
-// what an obligation is measured from: entitlement pro-rated for service so far
-// rather than a whole year granted on the hire date, plus whatever carried over.
+// The two answer different questions and are both correct:
+//
+//	RemainingDays = opening + entitled − taken   what may still be booked
+//	BalanceDays   = opening + earned   − taken   what is owed today
+//
+// Entitlement is the whole year granted up front; accrual is the part of it
+// served for so far. BalanceDays is the obligation, and the figure published to
+// finance — a liability is measured from what has been earned, never from what
+// somebody may eventually become entitled to.
 type LeaveBalance struct {
-	EmployeeNo    string  `json:"employee_no"`
-	LeaveTypeCode string  `json:"leave_type_code"`
-	Year          int     `json:"year"`
-	EntitledDays  float64 `json:"entitled_days"`
-	UsedDays      float64 `json:"used_days"`
+	EmployeeNo    string `json:"employee_no"`
+	LeaveTypeCode string `json:"leave_type_code"`
+	Year          int    `json:"year"`
+	// EntitledDays is the leave type's full annual entitlement.
+	EntitledDays float64 `json:"entitled_days"`
+	// UsedDays mirrors TakenDays, kept for callers that read the older name.
+	UsedDays float64 `json:"used_days"`
+	// RemainingDays is the entitlement basis: opening + entitled − taken.
 	RemainingDays float64 `json:"remaining_days"`
 
 	// OpeningDays is last year's unused balance, capped by policy.
 	OpeningDays float64 `json:"opening_days"`
 	// EarnedDays is entitlement accrued to date, pro-rated for service.
 	EarnedDays float64 `json:"earned_days"`
-	// TakenDays mirrors UsedDays; both are approved days in the year.
+	// TakenDays is approved days falling in the year.
 	TakenDays float64 `json:"taken_days"`
-	// BalanceDays is opening + earned − taken: the obligation. It differs from
-	// RemainingDays, which assumes a full year's entitlement.
+	// BalanceDays is the accrual basis: opening + earned − taken.
 	BalanceDays float64 `json:"balance_days"`
 
 	EmployeeID uuid.UUID `json:"-"`
@@ -93,33 +113,103 @@ func (s *Store) HasOverlappingLeave(ctx context.Context, employeeID uuid.UUID, s
 	return overlap, err
 }
 
+// GetLeaveBalance returns one employee's position on one leave type for a year,
+// on both bases at once.
+//
+// There used to be two answers to "what is the balance". This function returned
+// the entitlement one — a whole year granted on 1 January — and left the accrual
+// fields it declares at zero, while RecomputeLeaveBalanceTx wrote the accrual
+// one into erp_leave_balances and published *that* to finance. So the figure an
+// employee was shown and the obligation finance carried were computed
+// differently and could not be reconciled to each other.
+//
+// Both are now computed here, from the same inputs, by the same arithmetic the
+// materialised balance uses. They are different questions, not different
+// answers: "how much may I book this year" and "how much is owed today".
 func (s *Store) GetLeaveBalance(ctx context.Context, employeeNo, leaveTypeCode string, year int) (*LeaveBalance, error) {
+	asOf := time.Now().UTC()
 	if year <= 0 {
-		year = time.Now().UTC().Year()
+		year = asOf.Year()
 	}
-	var entitled float64
+	// For a past or future year, accrual is measured at that year's end rather
+	// than today, or a closed year would report itself part-earned forever.
+	if year != asOf.Year() {
+		asOf = time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
+
+	var (
+		bal                LeaveBalance
+		hire               *time.Time
+		paid               bool
+		carryOverMax       float64
+		accruesAfterMonths int
+	)
+	bal.EmployeeNo = employeeNo
+	bal.LeaveTypeCode = leaveTypeCode
+	bal.Year = year
+
 	err := s.pool.QueryRow(ctx, `
-		SELECT lt.days_per_year FROM erp_leave_types lt WHERE lt.code = $1`, leaveTypeCode).Scan(&entitled)
+		SELECT e.id, e.hire_date, lt.days_per_year, lt.paid,
+		       lt.carry_over_max_days, lt.accrues_after_months
+		FROM erp_employees e, erp_leave_types lt
+		WHERE e.employee_no = $1 AND lt.code = $2`, employeeNo, leaveTypeCode).
+		Scan(&bal.EmployeeID, &hire, &bal.EntitledDays, &paid, &carryOverMax, &accruesAfterMonths)
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	var used float64
-	err = s.pool.QueryRow(ctx, `
+
+	if err := s.pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(lr.days), 0)
 		FROM erp_leave_requests lr
-		JOIN erp_employees e ON e.id = lr.employee_id
 		JOIN erp_leave_types lt ON lt.id = lr.leave_type_id
-		WHERE e.employee_no = $1 AND lt.code = $2 AND lr.status = 'approved'
-		  AND EXTRACT(YEAR FROM lr.starts_on) = $3`, employeeNo, leaveTypeCode, year).Scan(&used)
-	if err != nil {
+		WHERE lr.employee_id = $1 AND lt.code = $2 AND lr.status = 'approved'
+		  AND EXTRACT(YEAR FROM lr.starts_on) = $3`,
+		bal.EmployeeID, leaveTypeCode, year).Scan(&bal.TakenDays); err != nil {
 		return nil, err
 	}
-	return &LeaveBalance{
-		EmployeeNo:    employeeNo,
-		LeaveTypeCode: leaveTypeCode,
-		Year:          year,
-		EntitledDays:  entitled,
-		UsedDays:      used,
-		RemainingDays: entitled - used,
-	}, nil
+	bal.UsedDays = bal.TakenDays
+
+	// Unpaid leave accrues nothing and is owed nothing, so every derived figure
+	// stays at zero. It is still taken, and TakenDays above records that.
+	if !paid {
+		return &bal, nil
+	}
+
+	if hire != nil {
+		bal.EarnedDays = earnedToDate(bal.EntitledDays, hire.UTC(), accruesAfterMonths, asOf)
+	}
+
+	if carryOverMax > 0 {
+		var prior float64
+		err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(opening_days + earned_days - taken_days, 0)
+			FROM erp_leave_balances
+			WHERE employee_id = $1 AND accrual_year = $2
+			  AND leave_type_id = (SELECT id FROM erp_leave_types WHERE code = $3)`,
+			bal.EmployeeID, year-1, leaveTypeCode).Scan(&prior)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		bal.OpeningDays = math.Max(0, math.Min(prior, carryOverMax))
+	}
+
+	// Entitlement basis: what may still be booked this year.
+	bal.RemainingDays = bal.OpeningDays + bal.EntitledDays - bal.TakenDays
+	// Accrual basis: what is owed today. This is the figure published to finance.
+	bal.BalanceDays = bal.OpeningDays + bal.EarnedDays - bal.TakenDays
+	return &bal, nil
+}
+
+// BookableDays is the figure a new leave request is checked against, under the
+// deployment's policy.
+//
+// Entitlement lets someone take their whole year in January and is what most
+// organisations actually operate; accrual only lets them take what they have
+// earned so far and is the stricter, cash-safer reading. Which one applies is a
+// policy decision, so it is configuration rather than a constant here.
+func (b LeaveBalance) BookableDays(basis string) float64 {
+	if basis == LeaveBasisAccrual {
+		return b.BalanceDays
+	}
+	return b.RemainingDays
 }

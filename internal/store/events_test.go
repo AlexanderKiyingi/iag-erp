@@ -21,12 +21,12 @@ func TestLeaveEventPayloadKeys(t *testing.T) {
 	}
 	data := map[string]any{
 		"leave_request_id": "550e8400-e29b-41d4-a716-446655440000",
-		"employee_no":        lr.EmployeeNo,
-		"leave_type_code":    lr.LeaveTypeCode,
-		"starts_on":          "2026-06-01",
-		"ends_on":            "2026-06-03",
-		"days":               lr.Days,
-		"status":             lr.Status,
+		"employee_no":      lr.EmployeeNo,
+		"leave_type_code":  lr.LeaveTypeCode,
+		"starts_on":        "2026-06-01",
+		"ends_on":          "2026-06-03",
+		"days":             lr.Days,
+		"status":           lr.Status,
 	}
 	for _, key := range []string{"leave_request_id", "employee_no", "leave_type_code", "starts_on", "ends_on", "days", "status"} {
 		if _, ok := data[key]; !ok {

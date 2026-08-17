@@ -53,12 +53,12 @@ func (s *Store) SendBirthdayReminders(ctx context.Context, pub *notify.Publisher
 			dept = *emp.DepartmentCode
 		}
 		vars := map[string]string{
-			"EmployeeName":  name,
-			"EmployeeNo":    emp.EmployeeNo,
-			"Department":    dept,
-			"JobTitle":      emp.JobTitle,
-			"BirthdayDate":  reminderOn.Format("2 January"),
-			"Title":         "Birthday reminder",
+			"EmployeeName": name,
+			"EmployeeNo":   emp.EmployeeNo,
+			"Department":   dept,
+			"JobTitle":     emp.JobTitle,
+			"BirthdayDate": reminderOn.Format("2 January"),
+			"Title":        "Birthday reminder",
 		}
 
 		if emp.Email != nil && strings.TrimSpace(*emp.Email) != "" {

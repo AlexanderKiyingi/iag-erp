@@ -12,7 +12,7 @@ type ImportRowError struct {
 
 type ImportResult struct {
 	Imported int              `json:"imported"`
-	Failed   []ImportRowError   `json:"failed,omitempty"`
+	Failed   []ImportRowError `json:"failed,omitempty"`
 }
 
 func (s *Store) ImportEmployees(ctx context.Context, items []CreateEmployeeInput) (ImportResult, error) {

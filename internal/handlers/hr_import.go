@@ -20,6 +20,14 @@ func (a *API) UpdateLeaveRequest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	existing, err := a.Store.GetLeaveRequest(c.Request.Context(), id)
+	if err != nil {
+		writeStoreError(c, err)
+		return
+	}
+	if !a.requireEmployeeInScope(c, existing.EmployeeNo) {
+		return
+	}
 	item, err := a.Store.UpdateLeaveRequest(c.Request.Context(), id, body)
 	if err != nil {
 		writeStoreError(c, err)
@@ -28,7 +36,13 @@ func (a *API) UpdateLeaveRequest(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+// Bulk import is HR-only across the board. A scoped import would have to be
+// checked row by row against the caller's tree, and an import that silently
+// dropped the rows outside it is worse than one that is refused outright.
 func (a *API) ImportEmployees(c *gin.Context) {
+	if !a.requireUnrestricted(c) {
+		return
+	}
 	var body struct {
 		Items []store.CreateEmployeeInput `json:"items"`
 	}
@@ -45,6 +59,9 @@ func (a *API) ImportEmployees(c *gin.Context) {
 }
 
 func (a *API) ImportLeaveRequests(c *gin.Context) {
+	if !a.requireUnrestricted(c) {
+		return
+	}
 	var body struct {
 		Items []store.CreateLeaveRequestInput `json:"items"`
 	}
@@ -61,6 +78,9 @@ func (a *API) ImportLeaveRequests(c *gin.Context) {
 }
 
 func (a *API) ImportAttendance(c *gin.Context) {
+	if !a.requireUnrestricted(c) {
+		return
+	}
 	var body struct {
 		Items []store.CreateAttendanceInput `json:"items"`
 	}

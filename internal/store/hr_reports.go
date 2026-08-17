@@ -139,12 +139,12 @@ func (s *Store) reportLeave(ctx context.Context, department, from, to string) (R
 	var totalDays float64
 	for _, lr := range items {
 		rows = append(rows, ReportRow{
-			"employee":    lr.EmployeeName,
-			"leave_type":  lr.LeaveTypeName,
-			"status":      lr.Status,
-			"starts_on":   lr.StartsOn.Format("2006-01-02"),
-			"ends_on":     lr.EndsOn.Format("2006-01-02"),
-			"days":        stringifyHRField(lr.Days),
+			"employee":   lr.EmployeeName,
+			"leave_type": lr.LeaveTypeName,
+			"status":     lr.Status,
+			"starts_on":  lr.StartsOn.Format("2006-01-02"),
+			"ends_on":    lr.EndsOn.Format("2006-01-02"),
+			"days":       stringifyHRField(lr.Days),
 		})
 		if lr.Status == "pending" {
 			pending++

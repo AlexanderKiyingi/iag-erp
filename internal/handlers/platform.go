@@ -17,13 +17,13 @@ func (a *API) Bootstrap(c *gin.Context) {
 	moduleCounts, _ := a.Store.ModuleRecordCounts(ctx)
 
 	c.JSON(http.StatusOK, gin.H{
-		"service":         a.Cfg.ServiceName,
-		"gateway":         a.Cfg.GatewayAPIPrefix,
-		"hr_counts":       counts,
-		"departments":     departments,
-		"pending_leave":   pendingLeave,
-		"module_counts":   moduleCounts,
-		"hr_modules":      store.HRModuleKeys,
+		"service":       a.Cfg.ServiceName,
+		"gateway":       a.Cfg.GatewayAPIPrefix,
+		"hr_counts":     counts,
+		"departments":   departments,
+		"pending_leave": pendingLeave,
+		"module_counts": moduleCounts,
+		"hr_modules":    store.HRModuleKeys,
 	})
 }
 

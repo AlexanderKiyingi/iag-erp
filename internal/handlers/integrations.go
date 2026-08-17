@@ -12,9 +12,13 @@ import (
 )
 
 func (a *API) IntegrationStatus(c *gin.Context) {
+	modules := []string{"hr", "production_orders", "compensation"}
+	if a.Cfg.PayrollEnabled {
+		modules = append(modules, "payroll")
+	}
 	out := gin.H{
 		"service":     a.Cfg.ServiceName,
-		"modules":     []string{"hr", "production_orders"},
+		"modules":     modules,
 		"event_bus":   a.Bus != nil && a.Bus.Enabled(),
 		"kafka_topic": events.TopicOperations,
 		"event_types": []string{
@@ -24,9 +28,20 @@ func (a *API) IntegrationStatus(c *gin.Context) {
 			events.TypeLeaveApproved,
 			events.TypeLeaveRejected,
 			events.TypeLeaveCancelled,
+			events.TypeLeaveBalanceChanged,
+			events.TypeEmployeeRateChanged,
+			events.TypePayrollRunPosted,
 			events.TypeProductionOrderCreated,
 			events.TypeProductionOrderUpdated,
 			events.TypeProductionOrderDeleted,
+		},
+		// The flags a frontend needs to know about to render the right screens:
+		// hiding payroll is better than showing it and collecting 404s.
+		"features": gin.H{
+			"payroll":           a.Cfg.PayrollEnabled,
+			"scope_enforced":    a.Cfg.HRScopeEnforced,
+			"work_week":         a.Cfg.HRWorkWeek,
+			"working_day_leave": true,
 		},
 		"webhooks": gin.H{
 			"production_orders": "/api/v1/integrations/production-orders/webhook",
@@ -83,10 +98,19 @@ func (a *API) GetEmployeeByUserID(c *gin.Context) {
 		writeStoreError(c, err)
 		return
 	}
+	// This is the endpoint a frontend calls to find out who it is logged in as,
+	// so it must stay usable by everyone — but resolving *someone else's* login
+	// to their employee record is a lookup, not self-service.
+	if !a.requireEmployeeInScope(c, item.EmployeeNo) {
+		return
+	}
 	c.JSON(http.StatusOK, item)
 }
 
 func (a *API) ListDirectReports(c *gin.Context) {
+	if !a.requireEmployeeInScope(c, c.Param("employee_no")) {
+		return
+	}
 	items, err := a.Store.ListDirectReports(c.Request.Context(), c.Param("employee_no"))
 	if err != nil {
 		writeStoreError(c, err)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -16,12 +17,12 @@ import (
 )
 
 type API struct {
-	Cfg   *config.Config
-	Store *store.Store
-	Audit *auditlog.Store
+	Cfg    *config.Config
+	Store  *store.Store
+	Audit  *auditlog.Store
 	Bus    *events.Bus
 	Notify *notify.Publisher
-	Pool  *pgxpool.Pool
+	Pool   *pgxpool.Pool
 }
 
 func (a *API) Health(c *gin.Context) {
@@ -37,17 +38,28 @@ func (a *API) Ready(c *gin.Context) {
 }
 
 func writeStoreError(c *gin.Context, err error) {
-	if err == store.ErrNotFound {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
-	if err == store.ErrConflict {
+	case errors.Is(err, store.ErrConflict):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict"})
-		return
-	}
-	if err == store.ErrBadInput {
+	case errors.Is(err, store.ErrForbidden):
+		// 403 rather than 404: the caller holds the permission for this kind of
+		// record, just not for this one. Hiding that distinction would leave an
+		// employee unable to tell a typo from a boundary.
+		c.JSON(http.StatusForbidden, gin.H{"error": "not permitted for this record", "code": "out_of_scope"})
+	case errors.Is(err, store.ErrInsufficientLeave):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient leave balance", "code": "insufficient_leave"})
+	case errors.Is(err, store.ErrNoWorkingDays):
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "the selected dates contain no working days",
+			"code":  "no_working_days",
+		})
+	case errors.Is(err, store.ErrNoCompensation):
+		c.JSON(http.StatusNotFound, gin.H{"error": "no effective compensation record", "code": "no_compensation"})
+	case errors.Is(err, store.ErrBadInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid input"})
-		return
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
-	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }

@@ -13,11 +13,12 @@ import (
 )
 
 type RouterDeps struct {
-	API          *API
-	Audit        *auditlog.Store
-	PlatformAuth *appmw.PlatformAuth
-	CORSOrigins  []string
-	StrictRBAC   bool
+	API            *API
+	Audit          *auditlog.Store
+	PlatformAuth   *appmw.PlatformAuth
+	CORSOrigins    []string
+	StrictRBAC     bool
+	PayrollEnabled bool
 }
 
 func NewRouter(deps RouterDeps) *gin.Engine {
@@ -65,6 +66,17 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.GET("/employees/:employee_no/leave-balance", appmw.RequirePermission("erp.view_leave"), api.GetLeaveBalance)
 		v1.PATCH("/employees/:employee_no", appmw.RequirePermission("erp.change_employee"), api.UpdateEmployee)
 
+		// Compensation is read by the employee themselves or by HR, and written
+		// only by HR — the handlers narrow further than the permission does.
+		v1.GET("/employees/:employee_no/compensation", appmw.RequirePermission("erp.view_compensation"), api.GetCompensation)
+		v1.GET("/employees/:employee_no/compensation/history", appmw.RequirePermission("erp.view_compensation"), api.ListCompensationHistory)
+		v1.PUT("/employees/:employee_no/compensation", appmw.RequirePermission("erp.change_compensation"), api.SetCompensation)
+
+		v1.GET("/employees/:employee_no/pay-components", appmw.RequirePermission("erp.view_compensation"), api.ListEmployeePayComponents)
+		v1.POST("/employees/:employee_no/pay-components", appmw.RequirePermission("erp.change_compensation"), api.AssignPayComponent)
+		v1.DELETE("/employees/:employee_no/pay-components/:component_id", appmw.RequirePermission("erp.change_compensation"), api.EndPayComponent)
+		v1.GET("/employees/:employee_no/payslips", appmw.RequirePermission("erp.view_payslip"), api.ListEmployeePayslips)
+
 		v1.GET("/leave-types", appmw.RequirePermission("erp.view_leave"), api.ListLeaveTypes)
 		v1.GET("/leave-requests", appmw.RequirePermission("erp.view_leave"), api.ListLeaveRequests)
 		v1.POST("/leave-requests", appmw.RequirePermission("erp.change_leave"), api.CreateLeaveRequest)
@@ -81,6 +93,61 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.POST("/attendance/clock-out", appmw.RequirePermission("erp.change_attendance"), api.ClockOut)
 		v1.DELETE("/attendance/:id", appmw.RequirePermission("erp.change_attendance"), api.DeleteAttendance)
 
+		// Recruitment. Not employee-scoped: a candidate is not on the roster,
+		// so there is no reporting line to narrow by.
+		v1.GET("/recruitment/requisitions", appmw.RequirePermission("erp.view_recruitment"), api.ListRequisitions)
+		v1.GET("/recruitment/requisitions/:id", appmw.RequirePermission("erp.view_recruitment"), api.GetRequisition)
+		v1.POST("/recruitment/requisitions", appmw.RequirePermission("erp.change_recruitment"), api.CreateRequisition)
+		v1.POST("/recruitment/requisitions/:id/status", appmw.RequirePermission("erp.change_recruitment"), api.SetRequisitionStatus)
+		v1.GET("/recruitment/applications", appmw.RequirePermission("erp.view_recruitment"), api.ListApplications)
+		v1.GET("/recruitment/applications/:id", appmw.RequirePermission("erp.view_recruitment"), api.GetApplication)
+		v1.POST("/recruitment/applications", appmw.RequirePermission("erp.change_recruitment"), api.CreateApplication)
+		v1.POST("/recruitment/applications/:id/advance", appmw.RequirePermission("erp.change_recruitment"), api.AdvanceApplication)
+		// Hiring writes to the roster, so it needs the employee grant too.
+		v1.POST("/recruitment/applications/:id/hire", appmw.RequirePermission("erp.change_employee"), api.HireApplicant)
+
+		// Onboarding and offboarding.
+		v1.GET("/checklist-templates", appmw.RequirePermission("erp.view_lifecycle"), api.ListChecklistTemplates)
+		v1.GET("/checklists", appmw.RequirePermission("erp.view_lifecycle"), api.ListChecklists)
+		v1.GET("/checklists/:id", appmw.RequirePermission("erp.view_lifecycle"), api.GetChecklist)
+		v1.POST("/checklists", appmw.RequirePermission("erp.change_lifecycle"), api.IssueChecklist)
+		v1.POST("/checklists/:id/complete", appmw.RequirePermission("erp.change_lifecycle"), api.CompleteChecklist)
+		v1.POST("/checklists/:id/cancel", appmw.RequirePermission("erp.change_lifecycle"), api.CancelChecklist)
+		// Ticking an item is done by IT and line managers, not only HR, so it
+		// carries the lighter grant.
+		v1.POST("/checklist-items/:item_id/status", appmw.RequirePermission("erp.complete_checklist_item"), api.SetChecklistItemStatus)
+
+		// Performance.
+		v1.GET("/performance/cycles", appmw.RequirePermission("erp.view_performance"), api.ListReviewCycles)
+		v1.POST("/performance/cycles", appmw.RequirePermission("erp.manage_performance"), api.CreateReviewCycle)
+		v1.POST("/performance/cycles/:id/status", appmw.RequirePermission("erp.manage_performance"), api.SetReviewCycleStatus)
+		v1.GET("/performance/reviews", appmw.RequirePermission("erp.view_performance"), api.ListReviews)
+		v1.GET("/performance/reviews/:id", appmw.RequirePermission("erp.view_performance"), api.GetReview)
+		v1.POST("/performance/reviews", appmw.RequirePermission("erp.change_performance"), api.OpenReview)
+		v1.POST("/performance/reviews/:id/advance", appmw.RequirePermission("erp.change_performance"), api.AdvanceReview)
+		v1.GET("/performance/goals", appmw.RequirePermission("erp.view_performance"), api.ListGoals)
+		v1.POST("/performance/goals", appmw.RequirePermission("erp.change_performance"), api.CreateGoal)
+		v1.PATCH("/performance/goals/:id", appmw.RequirePermission("erp.change_performance"), api.UpdateGoal)
+
+		// Disciplinary. Deliberately its own permission pair rather than folded
+		// into the general HR grants: these records are read on a need-to-know
+		// basis, not by everyone who can see a roster.
+		v1.GET("/disciplinary/cases", appmw.RequirePermission("erp.view_disciplinary"), api.ListCases)
+		v1.GET("/disciplinary/cases/:id", appmw.RequirePermission("erp.view_disciplinary"), api.GetCase)
+		v1.POST("/disciplinary/cases", appmw.RequirePermission("erp.change_disciplinary"), api.OpenCase)
+		v1.POST("/disciplinary/cases/:id/advance", appmw.RequirePermission("erp.change_disciplinary"), api.AdvanceCase)
+
+		// Training.
+		v1.GET("/training/courses", appmw.RequirePermission("erp.view_training"), api.ListCourses)
+		v1.POST("/training/courses", appmw.RequirePermission("erp.change_training"), api.CreateCourse)
+		v1.GET("/training/enrolments", appmw.RequirePermission("erp.view_training"), api.ListEnrolments)
+		v1.POST("/training/enrolments", appmw.RequirePermission("erp.change_training"), api.Enrol)
+		v1.PATCH("/training/enrolments/:id", appmw.RequirePermission("erp.change_training"), api.UpdateEnrolment)
+
+		// The generic JSONB module store. Still serves the modules that have
+		// not been promoted to a schema (shifts, helpdesk, documents, assets,
+		// settings) and stays in place for the promoted ones so no frontend
+		// breaks on this change.
 		hrModules := v1.Group("/hr/:module")
 		hrModules.GET("", appmw.RequirePermission("erp.view_hr_records"), api.ListHRModuleRecords)
 		hrModules.POST("", appmw.RequirePermission("erp.change_hr_records"), api.CreateHRModuleRecord)
@@ -88,6 +155,23 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		hrModules.GET("/:id", appmw.RequirePermission("erp.view_hr_records"), api.GetHRModuleRecord)
 		hrModules.PATCH("/:id", appmw.RequirePermission("erp.change_hr_records"), api.UpdateHRModuleRecord)
 		hrModules.DELETE("/:id", appmw.RequirePermission("erp.change_hr_records"), api.DeleteHRModuleRecord)
+
+		// Payroll is behind PAYROLL_ENABLED. It computes statutory deductions
+		// against live pay data, and it should not be reachable anywhere the
+		// seeded tax bands have not been reviewed against the current gazette.
+		if deps.PayrollEnabled {
+			v1.GET("/payroll/components", appmw.RequirePermission("erp.view_payroll"), api.ListPayComponentDefinitions)
+			v1.GET("/payroll/runs", appmw.RequirePermission("erp.view_payroll"), api.ListPayrollRuns)
+			v1.GET("/payroll/runs/:id", appmw.RequirePermission("erp.view_payroll"), api.GetPayrollRun)
+			v1.GET("/payroll/runs/:id/payslips", appmw.RequirePermission("erp.view_payroll"), api.ListPayslips)
+			v1.POST("/payroll/runs", appmw.RequirePermission("erp.run_payroll"), api.CreatePayrollRun)
+			v1.POST("/payroll/runs/:id/cancel", appmw.RequirePermission("erp.run_payroll"), api.CancelPayrollRun)
+			// Approving and posting are separate permissions from running,
+			// because separation of duties enforced only inside one grant is
+			// separation anybody holding that grant can undo.
+			v1.POST("/payroll/runs/:id/approve", appmw.RequirePermission("erp.approve_payroll"), api.ApprovePayrollRun)
+			v1.POST("/payroll/runs/:id/post", appmw.RequirePermission("erp.post_payroll"), api.PostPayrollRun)
+		}
 
 		v1.GET("/reports", appmw.RequirePermission("erp.view_hr_overview"), api.HRReport)
 
