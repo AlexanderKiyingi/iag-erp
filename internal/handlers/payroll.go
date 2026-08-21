@@ -3,6 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -137,7 +139,33 @@ func (a *API) ApprovePayrollRun(c *gin.Context) {
 		writePayrollError(c, err)
 		return
 	}
+	a.notifyPayrollApproved(c, item)
 	c.JSON(http.StatusOK, item)
+}
+
+// notifyPayrollApproved tells whoever prepared the run that it cleared
+// approval, so they know it is ready to post. Best effort — the approval is
+// committed and must not fail on a notification problem.
+func (a *API) notifyPayrollApproved(c *gin.Context, run *store.PayrollRun) {
+	if a.Notify == nil || !a.Notify.Enabled() || run == nil {
+		return
+	}
+	if run.CreatedByEmployeeNo == nil || strings.TrimSpace(*run.CreatedByEmployeeNo) == "" {
+		return
+	}
+	ctx := c.Request.Context()
+	emp, err := a.Store.GetEmployee(ctx, strings.TrimSpace(*run.CreatedByEmployeeNo))
+	if err != nil || emp == nil || emp.Email == nil || strings.TrimSpace(*emp.Email) == "" {
+		return
+	}
+	_ = a.Notify.PublishEmail(ctx, "erp.payroll:"+run.ID.String()+":approved",
+		strings.TrimSpace(*emp.Email), "approval.decision", map[string]string{
+			"Title": "Payroll run approved: " + run.RunRef,
+			"Body": "Payroll run " + run.RunRef + " for " + run.Period + " (" +
+				strconv.Itoa(run.EmployeeCount) + " employees, net " +
+				strconv.FormatFloat(run.Net, 'f', 2, 64) + " " + run.Currency +
+				") was approved and is ready to post.",
+		})
 }
 
 func (a *API) PostPayrollRun(c *gin.Context) {

@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -276,7 +278,35 @@ func (a *API) DecideLeaveRequest(c *gin.Context) {
 		writeStoreError(c, err)
 		return
 	}
+	a.notifyLeaveDecision(c, item)
 	c.JSON(http.StatusOK, item)
+}
+
+// notifyLeaveDecision emails the employee the outcome of their leave request.
+// Leave is decided by one person in one step, so the requester is the only
+// party to tell — there is no next approver. Best effort: the decision is
+// already committed and must not fail on a notification problem.
+func (a *API) notifyLeaveDecision(c *gin.Context, item *store.LeaveRequest) {
+	if a.Notify == nil || !a.Notify.Enabled() || item == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	emp, err := a.Store.GetEmployee(ctx, item.EmployeeNo)
+	if err != nil || emp == nil || emp.Email == nil || strings.TrimSpace(*emp.Email) == "" {
+		// No address on file: nothing to send. The decision still stands and is
+		// visible in the employee's leave list.
+		return
+	}
+	window := item.StartsOn.Format("2006-01-02") + " to " + item.EndsOn.Format("2006-01-02")
+	status := strings.ToLower(strings.TrimSpace(item.Status))
+	// Keyed on request + outcome so a retry does not double-send while a later
+	// status change still notifies.
+	eventID := "erp.leave:" + item.ID.String() + ":" + status
+	_ = a.Notify.PublishEmail(ctx, eventID, strings.TrimSpace(*emp.Email), "approval.decision", map[string]string{
+		"Title": "Leave " + status + ": " + window,
+		"Body": item.LeaveTypeName + " leave for " + window + " (" +
+			strconv.FormatFloat(item.Days, 'f', -1, 64) + " days) was " + status + ".",
+	})
 }
 
 func (a *API) CancelLeaveRequest(c *gin.Context) {
