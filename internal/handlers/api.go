@@ -59,6 +59,13 @@ func writeStoreError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no effective compensation record", "code": "no_compensation"})
 	case errors.Is(err, store.ErrBadInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid input"})
+	case errors.Is(err, store.ErrSchemaBehind):
+		// Not the caller's fault and not retryable by them: the deploy is half
+		// applied. 503 says "this service, later" rather than 400's "you, now".
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": err.Error(),
+			"code":  "schema_behind",
+		})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

@@ -1,10 +1,13 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestParseOptionalUserID(t *testing.T) {
@@ -56,5 +59,33 @@ func TestHRModuleKeysMatchMigrationConstraint(t *testing.T) {
 		if !IsHRModule(quoted) {
 			t.Errorf("the CHECK constraint allows %q but IsHRModule rejects it", quoted)
 		}
+	}
+}
+
+// A CHECK violation on the module column is a pending migration, not bad input.
+// Returning it verbatim hands an API client a Postgres error naming the table,
+// the constraint and the SQLSTATE, and tells them nothing they can act on.
+func TestHRModuleWriteErrClassifiesTheConstraintViolation(t *testing.T) {
+	violation := &pgconn.PgError{
+		Code:           "23514",
+		ConstraintName: hrModuleCheckConstraint,
+		Message:        `new row for relation "erp_hr_module_records" violates check constraint`,
+	}
+	got := hrModuleWriteErr(violation)
+	if !errors.Is(got, ErrSchemaBehind) {
+		t.Fatalf("module check violation should map to ErrSchemaBehind, got %v", got)
+	}
+	if !strings.Contains(got.Error(), "012_hr_module_keys.sql") {
+		t.Errorf("the error should name the migration to apply: %v", got)
+	}
+
+	// A different constraint is a different problem and must pass through, or a
+	// genuine data error would be reported as a deploy gap.
+	other := &pgconn.PgError{Code: "23514", ConstraintName: "erp_employees_status_check"}
+	if errors.Is(hrModuleWriteErr(other), ErrSchemaBehind) {
+		t.Error("an unrelated check violation must not read as a schema gap")
+	}
+	if hrModuleWriteErr(nil) != nil {
+		t.Error("nil must stay nil")
 	}
 }

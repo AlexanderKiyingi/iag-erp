@@ -19,6 +19,17 @@ var (
 	// ErrNoWorkingDays means the requested range contains no working day.
 	ErrNoWorkingDays = errors.New("range contains no working days")
 
+	// ErrSchemaBehind means the running code accepts something the database
+	// still rejects — a pending migration, not bad input from the caller.
+	//
+	// Code and schema deploy at different moments: the binary lands when the
+	// service restarts, a migration when it runs. In the window between, a
+	// widened allowlist in Go meets the old CHECK constraint, reads succeed and
+	// writes fail. Without its own error that surfaces as the raw Postgres
+	// message — table name, constraint name and SQLSTATE — handed to an API
+	// client who can do nothing with it.
+	ErrSchemaBehind = errors.New("database schema is behind the running code")
+
 	// ErrForbidden means the caller may use the endpoint but not on this record
 	// — someone else's employee, leave or pay. Distinct from a missing
 	// permission, which the middleware rejects before the store is reached.

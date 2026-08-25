@@ -58,6 +58,21 @@ func main() {
 	}
 
 	st := store.New(pool)
+
+	// A widened allowlist in Go and the CHECK constraint that mirrors it land at
+	// different moments — the binary on restart, the migration when it runs. In
+	// between, those modules read fine and fail every write, which is only
+	// discovered by someone attempting one. Say it at boot instead.
+	if gap, err := st.HRModuleConstraintGap(ctx); err != nil {
+		log.Printf("hr module constraint check failed: %v", err)
+	} else if len(gap) > 0 {
+		log.Printf(
+			"WARNING: erp_hr_module_records rejects module(s) %v that this build accepts. "+
+				"migrations/012_hr_module_keys.sql has not been applied — those modules "+
+				"will read but fail every write. Apply it, or set AUTO_MIGRATE=true.",
+			gap,
+		)
+	}
 	// Leave is charged in working days, so the work week decides what a leave
 	// request costs and what the resulting liability is worth.
 	st.SetWorkWeek(store.ParseWorkWeek(cfg.HRWorkWeek))

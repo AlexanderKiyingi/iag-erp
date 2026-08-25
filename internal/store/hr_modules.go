@@ -3,13 +3,74 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// hrModuleCheckConstraint is the CHECK that bounds erp_hr_module_records.module.
+// Named because two things have to agree about it: HRModuleKeys below, and the
+// constraint itself (migrations/007, widened by 012).
+const hrModuleCheckConstraint = "erp_hr_module_records_module_check"
+
+/*
+hrModuleWriteErr turns a module CHECK violation into ErrSchemaBehind.
+
+IsHRModule has already accepted the module by the time a write is attempted, so
+if the database still rejects it the two lists disagree and the pending
+migration is the reason — never the caller's payload.
+*/
+func hrModuleWriteErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	// 23514 = check_violation.
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" &&
+		pgErr.ConstraintName == hrModuleCheckConstraint {
+		return fmt.Errorf(
+			"%w: module is allowed by this build but rejected by %s "+
+				"(apply migrations/012_hr_module_keys.sql)",
+			ErrSchemaBehind, hrModuleCheckConstraint,
+		)
+	}
+	return err
+}
+
+/*
+HRModuleConstraintGap reports the module keys this build accepts that the live
+CHECK constraint would refuse.
+
+Called at boot so a half-applied deploy says so in the log instead of being
+discovered as a 502 on the first write. Read-only: it never alters the
+constraint, because an operator who turned AUTO_MIGRATE off did so on purpose.
+*/
+func (s *Store) HRModuleConstraintGap(ctx context.Context) ([]string, error) {
+	var def string
+	err := s.pool.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conname = $1`, hrModuleCheckConstraint).Scan(&def)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No enumerated constraint at all — nothing to disagree with.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, key := range HRModuleKeys {
+		if !strings.Contains(def, "'"+key+"'") {
+			missing = append(missing, key)
+		}
+	}
+	return missing, nil
+}
 
 // HR module keys served by the generic records table.
 //
@@ -195,7 +256,7 @@ func (s *Store) CreateHRModuleRecord(ctx context.Context, module string, in Upse
 		VALUES ($1, $2, $3, $4::jsonb)
 		RETURNING id`, module, dept, status, raw).Scan(&id)
 	if err != nil {
-		return nil, err
+		return nil, hrModuleWriteErr(err)
 	}
 	return s.GetHRModuleRecord(ctx, module, id)
 }
