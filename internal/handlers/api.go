@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
+	"github.com/alvor-technologies/iag-platform-go/middleware"
 	"github.com/gin-gonic/gin"
 
 	"iag-erp/backend/internal/auditlog"
@@ -67,6 +69,27 @@ func writeStoreError(c *gin.Context, err error) {
 			"code":  "schema_behind",
 		})
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		// Everything above is a decision this service made and can explain. This
+		// is the opposite: a driver or database error nobody classified, and
+		// handing it back verbatim tells the caller things they should not learn
+		// and nothing they can use.
+		//
+		// What escaped: table, column and constraint names plus the SQLSTATE on
+		// any constraint or type error, and — worst of it — pgx renders a
+		// connection failure as "failed to connect to `user=… database=…`", so a
+		// database outage published the credentials' username and the database
+		// name to anyone who could make a request fail.
+		//
+		// The detail belongs in the log, where it is actually useful. The caller
+		// gets the request id, which is already on the response header, so a
+		// report can be tied back to the logged cause.
+		id := middleware.RequestIDFrom(c)
+		log.Printf("unhandled store error [%s] %s %s: %v",
+			id, c.Request.Method, c.FullPath(), err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":      "internal error",
+			"code":       "internal_error",
+			"request_id": id,
+		})
 	}
 }
