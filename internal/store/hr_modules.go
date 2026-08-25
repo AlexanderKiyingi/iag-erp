@@ -11,11 +11,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// HR module keys served by the generic records table (HRMIAG frontend modules).
+// HR module keys served by the generic records table.
+//
+// Must stay in step with the CHECK constraint on erp_hr_module_records
+// (migrations/007_hr_modules.sql, widened by 012_hr_module_keys.sql). A key
+// here that the constraint rejects fails on write with a database error instead
+// of the 400 this list is meant to produce; a key in the constraint but not
+// here is simply unreachable.
 var HRModuleKeys = []string{
 	"shifts", "recruitment", "onboarding", "performance", "training",
 	"helpdesk", "documents", "disciplinary", "assets", "offboarding",
 	"payroll", "settings",
+	// The IAG HR app: geofenced worksites and blocks, the holiday calendar
+	// behind working-day leave, and payroll reference data.
+	"sites", "blocks", "holidays",
+	"payslip-items", "recurring-payslips", "statutory-remittances",
 }
 
 func IsHRModule(module string) bool {
