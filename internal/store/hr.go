@@ -310,7 +310,10 @@ func (s *Store) CreateEmployee(ctx context.Context, in CreateEmployeeInput) (*Em
 	if in.Attrs != nil {
 		attrs, _ = json.Marshal(in.Attrs)
 	}
-	empType := strings.ToLower(strings.TrimSpace(in.EmploymentType))
+	empType, ok := NormaliseEmploymentType(in.EmploymentType)
+	if !ok {
+		return nil, ErrBadInput
+	}
 	if empType == "" {
 		empType = "permanent"
 	}
@@ -407,6 +410,17 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 	if err != nil {
 		return nil, err
 	}
+	// Both columns are COALESCE(NULLIF($n,''), col), so an empty string means
+	// "leave it alone" and normalising to "" is the correct no-op. An unknown
+	// value is rejected here instead of violating the CHECK three frames down.
+	empType, ok := NormaliseEmploymentType(in.EmploymentType)
+	if !ok {
+		return nil, ErrBadInput
+	}
+	status, ok := NormaliseEmployeeStatus(in.Status)
+	if !ok {
+		return nil, ErrBadInput
+	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE erp_employees SET
 		  first_name = COALESCE(NULLIF($2,''), first_name),
@@ -426,7 +440,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 		  updated_at = NOW()
 		WHERE employee_no = $1`,
 		employeeNo, in.FirstName, in.LastName, in.Email, in.Phone, deptID,
-		in.JobTitle, in.EmploymentType, in.Status, birthDate, in.PlantCode, in.OperatorRef, userID, in.ClearUserID,
+		in.JobTitle, empType, status, birthDate, in.PlantCode, in.OperatorRef, userID, in.ClearUserID,
 		managerID, in.ClearManager, attrs)
 	if err != nil {
 		return nil, err
@@ -875,7 +889,10 @@ func (s *Store) UpsertAttendance(ctx context.Context, in CreateAttendanceInput) 
 		}
 		return nil, err
 	}
-	status := strings.ToLower(strings.TrimSpace(in.Status))
+	status, ok := NormaliseAttendanceStatus(in.Status)
+	if !ok {
+		return nil, ErrBadInput
+	}
 	if status == "" {
 		status = "present"
 	}

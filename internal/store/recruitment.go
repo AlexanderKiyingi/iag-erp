@@ -117,7 +117,15 @@ func (s *Store) CreateRequisition(ctx context.Context, in CreateRequisitionInput
 	if in.Headcount <= 0 {
 		in.Headcount = 1
 	}
-	employmentType := strings.TrimSpace(in.EmploymentType)
+	// Lower-cased for the same reason CreateEmployee does it (hr.go): the
+	// column's CHECK is lower-case, and a caller sending "Permanent" from a
+	// form's Title Case option list would otherwise 500 on the constraint
+	// rather than be understood. The two paths describe the same vocabulary,
+	// so they have to normalise it the same way.
+	employmentType, ok := NormaliseEmploymentType(in.EmploymentType)
+	if !ok {
+		return nil, ErrBadInput
+	}
 	if employmentType == "" {
 		employmentType = "permanent"
 	}
