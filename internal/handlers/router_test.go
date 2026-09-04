@@ -59,6 +59,10 @@ func TestPayrollRoutesAreGatedByFlag(t *testing.T) {
 		{http.MethodPost, "/api/v1/payroll/runs"},
 		{http.MethodPost, "/api/v1/payroll/runs/:id/approve"},
 		{http.MethodPost, "/api/v1/payroll/runs/:id/post"},
+		// Externally-computed payroll is gated by the same flag. The flag also
+		// gates listing, approving and posting, so registering this outside the
+		// group would let a run be created that could never be read or paid.
+		{http.MethodPost, "/api/v1/payroll/external-runs"},
 	}
 
 	off := newTestRouter(t, false)

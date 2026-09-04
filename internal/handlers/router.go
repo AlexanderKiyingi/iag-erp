@@ -165,6 +165,10 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			v1.GET("/payroll/runs/:id", appmw.RequirePermission("erp.view_payroll"), api.GetPayrollRun)
 			v1.GET("/payroll/runs/:id/payslips", appmw.RequirePermission("erp.view_payroll"), api.ListPayslips)
 			v1.POST("/payroll/runs", appmw.RequirePermission("erp.run_payroll"), api.CreatePayrollRun)
+		// Inside the PayrollEnabled group on purpose: the flag also gates listing,
+		// approving and posting, so a run that could be created but never read,
+		// approved or posted would be a write-only hole.
+		v1.POST("/payroll/external-runs", appmw.RequirePermission("erp.run_payroll"), api.RecordExternalPayrollRun)
 			v1.POST("/payroll/runs/:id/cancel", appmw.RequirePermission("erp.run_payroll"), api.CancelPayrollRun)
 			// Approving and posting are separate permissions from running,
 			// because separation of duties enforced only inside one grant is
