@@ -19,7 +19,13 @@ type Department struct {
 	Name      string    `json:"name"`
 	PlantCode *string   `json:"plant_code,omitempty"`
 	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+	// Attrs is HR's own record of the department — head of department, cost
+	// centre, planned headcount, attachments, notes. The service does not
+	// reason about any of it (it rolls up no headcount and posts to no cost
+	// centre), which is exactly why it is a free map rather than five columns
+	// the schema would be promising to understand. Same shape as Employee.Attrs.
+	Attrs     map[string]any `json:"attrs"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 type Employee struct {
@@ -108,7 +114,7 @@ func (s *Store) HRCounts(ctx context.Context) (HRCounts, error) {
 }
 
 func (s *Store) ListDepartments(ctx context.Context, includeInactive bool) ([]Department, error) {
-	q := `SELECT id, code, name, plant_code, active, created_at FROM erp_departments`
+	q := `SELECT id, code, name, plant_code, active, attrs, created_at FROM erp_departments`
 	if !includeInactive {
 		q += ` WHERE active = true`
 	}
@@ -121,18 +127,21 @@ func (s *Store) ListDepartments(ctx context.Context, includeInactive bool) ([]De
 	var out []Department
 	for rows.Next() {
 		var d Department
-		if err := rows.Scan(&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &d.CreatedAt); err != nil {
+		var attrs []byte
+		if err := rows.Scan(&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &attrs, &d.CreatedAt); err != nil {
 			return nil, err
 		}
+		d.Attrs = scanAttrs(attrs)
 		out = append(out, d)
 	}
 	return out, rows.Err()
 }
 
 type CreateDepartmentInput struct {
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	PlantCode string `json:"plant_code"`
+	Code      string         `json:"code"`
+	Name      string         `json:"name"`
+	PlantCode string         `json:"plant_code"`
+	Attrs     map[string]any `json:"attrs"`
 }
 
 func (s *Store) CreateDepartment(ctx context.Context, in CreateDepartmentInput) (*Department, error) {
@@ -140,22 +149,30 @@ func (s *Store) CreateDepartment(ctx context.Context, in CreateDepartmentInput) 
 	if code == "" || strings.TrimSpace(in.Name) == "" {
 		return nil, ErrBadInput
 	}
+	attrs := []byte("{}")
+	if in.Attrs != nil {
+		attrs, _ = json.Marshal(in.Attrs)
+	}
 	var d Department
+	var out []byte
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO erp_departments (code, name, plant_code)
-		VALUES ($1, $2, NULLIF($3,''))
-		RETURNING id, code, name, plant_code, active, created_at`,
-		code, in.Name, in.PlantCode).Scan(&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &d.CreatedAt)
+		INSERT INTO erp_departments (code, name, plant_code, attrs)
+		VALUES ($1, $2, NULLIF($3,''), $4)
+		RETURNING id, code, name, plant_code, active, attrs, created_at`,
+		code, in.Name, in.PlantCode, attrs).Scan(
+		&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &out, &d.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
+	d.Attrs = scanAttrs(out)
 	return &d, nil
 }
 
 type UpdateDepartmentInput struct {
-	Name      string `json:"name"`
-	PlantCode string `json:"plant_code"`
-	Active    *bool  `json:"active"`
+	Name      string         `json:"name"`
+	PlantCode string         `json:"plant_code"`
+	Active    *bool          `json:"active"`
+	Attrs     map[string]any `json:"attrs"`
 }
 
 func (s *Store) UpdateDepartment(ctx context.Context, code string, in UpdateDepartmentInput) (*Department, error) {
@@ -163,21 +180,32 @@ func (s *Store) UpdateDepartment(ctx context.Context, code string, in UpdateDepa
 	if code == "" {
 		return nil, ErrBadInput
 	}
+	// A nil Attrs means "leave it alone", matching how every other field on this
+	// update behaves. Sending an empty map would erase what HR recorded about
+	// the department because a caller happened not to send the key.
+	var attrs []byte
+	if in.Attrs != nil {
+		attrs, _ = json.Marshal(in.Attrs)
+	}
 	var d Department
+	var out []byte
 	err := s.pool.QueryRow(ctx, `
 		UPDATE erp_departments SET
 		  name = COALESCE(NULLIF($2,''), name),
 		  plant_code = CASE WHEN $3 = '' THEN plant_code ELSE NULLIF($3,'') END,
-		  active = COALESCE($4, active)
+		  active = COALESCE($4, active),
+		  attrs = COALESCE($5, attrs)
 		WHERE code = $1
-		RETURNING id, code, name, plant_code, active, created_at`,
-		code, in.Name, in.PlantCode, in.Active).Scan(&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &d.CreatedAt)
+		RETURNING id, code, name, plant_code, active, attrs, created_at`,
+		code, in.Name, in.PlantCode, in.Active, attrs).Scan(
+		&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &out, &d.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	d.Attrs = scanAttrs(out)
 	return &d, nil
 }
 

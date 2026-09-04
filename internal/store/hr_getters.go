@@ -20,16 +20,18 @@ const employeeFrom = `FROM erp_employees e
 func (s *Store) GetDepartment(ctx context.Context, code string) (*Department, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	var d Department
+	var attrs []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, code, name, plant_code, active, created_at
+		SELECT id, code, name, plant_code, active, attrs, created_at
 		FROM erp_departments WHERE code = $1`, code).Scan(
-		&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &d.CreatedAt)
+		&d.ID, &d.Code, &d.Name, &d.PlantCode, &d.Active, &attrs, &d.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	d.Attrs = scanAttrs(attrs)
 	return &d, nil
 }
 
