@@ -75,6 +75,10 @@ type LeaveRequest struct {
 	Reason        string     `json:"reason"`
 	Status        string     `json:"status"`
 	ApproverRef   *string    `json:"approver_ref,omitempty"`
+	// DecisionNote is why the request was decided. Every approval desk collects
+	// a comment, and a rejection without one is the case where it matters most:
+	// the employee is told no and cannot be told why.
+	DecisionNote  string     `json:"decision_note"`
 	DecidedAt     *time.Time `json:"decided_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
@@ -743,7 +747,7 @@ func (s *Store) UpdateLeaveRequest(ctx context.Context, id uuid.UUID, in UpdateL
 // free-text approver_ref the frontend sends. The authority check itself belongs
 // to the caller, which knows the requester's place in the approver's tree; what
 // is recorded here is who it was, so a decision can be answered for later.
-func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, approverRef, decidedByEmployeeNo string) (*LeaveRequest, error) {
+func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, approverRef, note, decidedByEmployeeNo string) (*LeaveRequest, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
 	var status string
 	switch action {
@@ -765,12 +769,13 @@ func (s *Store) DecideLeaveRequest(ctx context.Context, id uuid.UUID, action, ap
 	var employeeID, leaveTypeID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		UPDATE erp_leave_requests
-		SET status = $2, approver_ref = NULLIF($3,''), decided_at = NOW(),
+		SET status = $2, approver_ref = NULLIF($3,''), decision_note = $4, decided_at = NOW(),
 		    decided_by_employee_id = (
-		        SELECT id FROM erp_employees WHERE employee_no = NULLIF($4,'')
+		        SELECT id FROM erp_employees WHERE employee_no = NULLIF($5,'')
 		    )
 		WHERE id = $1 AND status = 'pending'
-		RETURNING employee_id, leave_type_id`, id, status, approverRef, decidedByEmployeeNo).
+		RETURNING employee_id, leave_type_id`,
+		id, status, approverRef, strings.TrimSpace(note), decidedByEmployeeNo).
 		Scan(&employeeID, &leaveTypeID)
 	if err != nil {
 		if err == pgx.ErrNoRows {

@@ -236,6 +236,9 @@ func (a *API) DecideLeaveRequest(c *gin.Context) {
 	var body struct {
 		Action      string `json:"action"`
 		ApproverRef string `json:"approver_ref"`
+		// Why. Optional, but the reason a rejection is worth reading — and the
+		// field every approval desk in front of this service already collects.
+		Note string `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -273,7 +276,7 @@ func (a *API) DecideLeaveRequest(c *gin.Context) {
 	// frontend sends. Resolved even when scoping is off, so the audit trail
 	// starts filling before the flag is turned on rather than after.
 	item, err := a.Store.DecideLeaveRequest(c.Request.Context(), id, body.Action, body.ApproverRef,
-		a.resolveCallerEmployeeNo(c))
+		body.Note, a.resolveCallerEmployeeNo(c))
 	if err != nil {
 		writeStoreError(c, err)
 		return
