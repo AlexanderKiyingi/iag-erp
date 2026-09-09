@@ -11,28 +11,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: AlexanderKiyingi/IAG_multi_backend
-          path: meta
-          sparse-checkout: |
-            shared/platform-go
-          sparse-checkout-cone-mode: false
-
-      - uses: actions/checkout@v4
-        with:
-          path: service
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
 
-      - name: Link platform-go
-        run: |
-          mkdir -p service/shared
-          cp -r meta/shared/platform-go service/shared/platform-go
+      # go.mod carries the meta-repo-only replace
+      # (=> ../../../shared/platform-go), which does not exist in a standalone
+      # checkout. This job used to resolve it by checking out the meta-repo for
+      # shared/platform-go, but that repo is private and the job's GITHUB_TOKEN
+      # is scoped to iag-erp, so the step failed with "Not Found" on every run
+      # -- build and test had not executed since the meta-repo was closed.
+      #
+      # Build against the committed snapshot instead, exactly as the standalone
+      # Dockerfile target does. Refresh it with scripts/sync-platform-go.sh.
+      - name: Point platform-go at the vendored snapshot
+        run: go mod edit -replace=github.com/alvor-technologies/iag-platform-go=./third_party/platform-go
 
       - name: Build and test
-        working-directory: service
         run: |
           go build ./...
           go test ./...
