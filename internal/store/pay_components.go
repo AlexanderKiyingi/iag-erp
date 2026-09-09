@@ -129,9 +129,19 @@ func (s *Store) AssignPayComponent(ctx context.Context, employeeNo string, in As
 	}
 
 	var id uuid.UUID
+	// Re-assigning a component on a date it already has corrects the amount
+	// rather than adding a second row. The calculation sums every component
+	// effective in the period, so an unconditional INSERT paid the allowance
+	// twice — silently, because two valid rows are not an error. Mirrors
+	// SetCompensation, which has upserted on (employee, effective_from) since
+	// the compensation table was added.
 	if err := s.pool.QueryRow(ctx, `
 		INSERT INTO erp_employee_pay_components (employee_id, component_code, amount, effective_from, effective_to)
-		VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (employee_id, component_code, effective_from) DO UPDATE
+		SET amount = EXCLUDED.amount,
+		    effective_to = EXCLUDED.effective_to
+		RETURNING id`,
 		employeeID, code, in.Amount, effectiveFrom, effectiveTo).Scan(&id); err != nil {
 		return nil, err
 	}
