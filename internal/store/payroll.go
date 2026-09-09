@@ -34,6 +34,15 @@ var (
 	ErrSelfApproval = errors.New("payroll must be approved by someone other than its preparer")
 	// ErrPeriodAlreadyPosted means this month has already reached the ledger.
 	ErrPeriodAlreadyPosted = errors.New("a payroll run for this period has already been posted")
+	// ErrExternalRunConflict means a computed run already holds this period, so
+	// an externally-computed one must not overwrite it. Two engines disagreeing
+	// about one month is a question for a person, not something to resolve by
+	// letting the last writer win.
+	ErrExternalRunConflict = errors.New("a computed payroll run already exists for this period")
+	// ErrPayslipNotBalanced means a supplied payslip's own figures do not add
+	// up. The service does not recompute an external payroll, but it will not
+	// store arithmetic that contradicts itself either.
+	ErrPayslipNotBalanced = errors.New("payslip totals do not agree with their components")
 )
 
 // PayrollRun is the header for one period's payroll.
@@ -56,6 +65,11 @@ type PayrollRun struct {
 	ApprovedAt           *time.Time `json:"approved_at,omitempty"`
 	PostedAt             *time.Time `json:"posted_at,omitempty"`
 	Notes                string     `json:"notes"`
+	// Source says which engine produced these figures: 'computed' when this
+	// service derived them, 'external' when they arrived already calculated.
+	// A payslip that has to be explained later needs to know which.
+	Source               string     `json:"source"`
+	SourceEngine         string     `json:"source_engine"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	// Skipped names the employees left out and why. A run that silently covered
@@ -80,14 +94,15 @@ type Payslip struct {
 const payrollRunColumns = `id, run_ref, period, status, currency, employee_count,
 	gross, taxable_gross, paye, nssf_employee, nssf_employer, other_deductions, net,
 	created_by_employee_no, approved_by_employee_no, approved_at, posted_at, notes,
-	created_at, updated_at`
+	source, source_engine, created_at, updated_at`
 
 func scanPayrollRun(row pgx.Row) (*PayrollRun, error) {
 	var r PayrollRun
 	err := row.Scan(&r.ID, &r.RunRef, &r.Period, &r.Status, &r.Currency, &r.EmployeeCount,
 		&r.Gross, &r.TaxableGross, &r.PAYE, &r.NSSFEmployee, &r.NSSFEmployer,
 		&r.OtherDeductions, &r.Net, &r.CreatedByEmployeeNo, &r.ApprovedByEmployeeNo,
-		&r.ApprovedAt, &r.PostedAt, &r.Notes, &r.CreatedAt, &r.UpdatedAt)
+		&r.ApprovedAt, &r.PostedAt, &r.Notes, &r.Source, &r.SourceEngine,
+		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -163,7 +178,12 @@ func (s *Store) CreatePayrollRun(ctx context.Context, period, currency, createdB
 
 	// Drafts for the period are replaced, not accumulated.
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM erp_payroll_runs WHERE period = $1 AND status IN ('draft', 'cancelled')`,
+		// Only this service's own drafts are replaced. An externally-computed run
+		// for the same period is somebody else's arithmetic and possibly the one
+		// they intend to pay -- recomputing a month must not delete it silently.
+		// They collide later, deliberately, at the posted-period unique index.
+		`DELETE FROM erp_payroll_runs
+		 WHERE period = $1 AND status IN ('draft', 'cancelled') AND source = 'computed'`,
 		period); err != nil {
 		return nil, err
 	}

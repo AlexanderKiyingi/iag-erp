@@ -36,6 +36,15 @@ func writePayrollError(c *gin.Context, err error) {
 			"error": "a payroll run for this period has already been posted",
 			"code":  "period_posted",
 		})
+	case errors.Is(err, store.ErrExternalRunConflict):
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "a payroll run computed by this service already exists for this period",
+			"code":  "computed_run_exists",
+		})
+	case errors.Is(err, store.ErrPayslipNotBalanced):
+		// Naming the employee matters: the caller has to find the one slip that
+		// does not add up, and a generic 400 sends them through the whole run.
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "payslip_unbalanced"})
 	default:
 		writeStoreError(c, err)
 	}
@@ -122,6 +131,37 @@ func (a *API) CreatePayrollRun(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, item)
+}
+
+// RecordExternalPayrollRun stores a payroll another engine computed.
+//
+// Guarded by erp.run_payroll, the same grant as computing one here: submitting
+// a payroll *is* preparing a run, whoever did the arithmetic. A separate
+// codename would need registering, granting and whitelisting for an act the
+// existing permission already names correctly.
+//
+// The run lands as a draft, so approving and posting it are unchanged — a
+// different person still has to approve, and posting still needs
+// erp.post_payroll. Separation of duties must not be bypassable by choosing a
+// different endpoint.
+func (a *API) RecordExternalPayrollRun(c *gin.Context) {
+	preparer, ok := a.callerEmployeeNo(c)
+	if !ok {
+		return
+	}
+	var body store.ExternalRunInput
+	if err := bindJSONCoerced(c, &body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	run, skipped, err := a.Store.RecordExternalPayrollRun(c.Request.Context(), body, preparer)
+	if err != nil {
+		writePayrollError(c, err)
+		return
+	}
+	// `skipped` is named rather than folded away: a payroll that covered fewer
+	// people than the caller sent must not read as a complete one.
+	c.JSON(http.StatusCreated, gin.H{"run": run, "skipped": skipped})
 }
 
 func (a *API) ApprovePayrollRun(c *gin.Context) {
