@@ -15,7 +15,7 @@ import (
 
 // hrModuleCheckConstraint is the CHECK that bounds erp_hr_module_records.module.
 // Named because two things have to agree about it: HRModuleKeys below, and the
-// constraint itself (migrations/007, widened by 012 and 019).
+// constraint itself (migrations/007, widened by 012, 019 and 025).
 const hrModuleCheckConstraint = "erp_hr_module_records_module_check"
 
 // hrModuleKeysMigration is the migration that last widened that CHECK, and so
@@ -25,7 +25,7 @@ const hrModuleCheckConstraint = "erp_hr_module_records_module_check"
 // drift test reads: the constraint that wins at runtime is the one in the
 // newest migration, and a test pinned to an older file passes while the
 // deployment disagrees with the build. Update it with each widening.
-const hrModuleKeysMigration = "019_hr_module_keys_v2.sql"
+const hrModuleKeysMigration = "025_hr_module_keys_v3.sql"
 
 /*
 hrModuleWriteErr turns a module CHECK violation into ErrSchemaBehind.
@@ -101,6 +101,10 @@ var HRModuleKeys = []string{
 	// them -- reads included -- was a 400 from IsHRModule.
 	"employee-profiles", "performance-kpis", "training-and-development",
 	"contracts",
+	// The IAG HR app, third round. Found by driving the deployed app in a
+	// browser: the biometric register was mapped onto a key called
+	// "benefits" that never existed here, and 400ed on every call.
+	"biometric-enrolments",
 }
 
 func IsHRModule(module string) bool {
