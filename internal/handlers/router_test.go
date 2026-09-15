@@ -63,6 +63,11 @@ func TestPayrollRoutesAreGatedByFlag(t *testing.T) {
 		// gates listing, approving and posting, so registering this outside the
 		// group would let a run be created that could never be read or paid.
 		{http.MethodPost, "/api/v1/payroll/external-runs"},
+		// So is the approval chain. Its terminal hops call approve and post, so
+		// a chain reachable while those are not would be a route that always
+		// fails at its last step.
+		{http.MethodPost, "/api/v1/payroll/runs/:id/chain"},
+		{http.MethodGet, "/api/v1/payroll/runs/:id/approvals"},
 	}
 
 	off := newTestRouter(t, false)

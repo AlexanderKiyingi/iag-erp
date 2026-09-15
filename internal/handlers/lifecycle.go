@@ -291,18 +291,12 @@ func (a *API) IssueChecklist(c *gin.Context) {
 	if !a.requireUnrestricted(c) {
 		return
 	}
-	var body struct {
-		EmployeeNo    string `json:"employee_no"`
-		TemplateCode  string `json:"template_code"`
-		ReferenceDate string `json:"reference_date"`
-		Notes         string `json:"notes"`
-	}
+	var body store.IssueChecklistInput
 	if err := bindJSONCoerced(c, &body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	item, err := a.Store.IssueChecklist(c.Request.Context(), body.EmployeeNo,
-		body.TemplateCode, body.ReferenceDate, body.Notes)
+	item, err := a.Store.IssueChecklist(c.Request.Context(), body)
 	if err != nil {
 		writeLifecycleError(c, err)
 		return

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -45,6 +46,16 @@ type EmployeeChecklist struct {
 	ReferenceDate time.Time               `json:"reference_date"`
 	CompletedOn   *time.Time              `json:"completed_on,omitempty"`
 	Notes         string                  `json:"notes"`
+	// Buddy is who showed the joiner around. An employee number rather than a
+	// name, because names are not unique and do not survive a marriage.
+	BuddyEmployeeNo string                `json:"buddy_employee_no"`
+	// Position and Department are read off the employee rather than stored:
+	// a copy taken when the checklist was issued is wrong the moment somebody
+	// transfers, and an onboarding record that disagrees with the directory
+	// about which department a person is in is worse than one that says nothing.
+	Position      string                  `json:"position"`
+	Department    string                  `json:"department_code"`
+	Attrs         map[string]any          `json:"attrs"`
 	CreatedAt     time.Time               `json:"created_at"`
 	Items         []EmployeeChecklistItem `json:"items,omitempty"`
 	// Outstanding is the count of required items still to do — the one number
@@ -125,7 +136,22 @@ func (s *Store) templateItems(ctx context.Context, templateID uuid.UUID) ([]Chec
 // referenceDate anchors the due dates: the start date for onboarding, the last
 // working day for offboarding. Item offsets are relative to it, which is why an
 // offboarding item can be due before the checklist is even issued.
-func (s *Store) IssueChecklist(ctx context.Context, employeeNo, templateCode, referenceDate, notes string) (*EmployeeChecklist, error) {
+// IssueChecklistInput is what issuing takes. A struct rather than a growing
+// positional list: the onboarding form has already added one field to it and
+// will add more, and four bare strings in a row is where a caller eventually
+// swaps two of them.
+type IssueChecklistInput struct {
+	EmployeeNo      string         `json:"employee_no"`
+	TemplateCode    string         `json:"template_code"`
+	ReferenceDate   string         `json:"reference_date"`
+	Notes           string         `json:"notes"`
+	BuddyEmployeeNo string         `json:"buddy_employee_no"`
+	Attrs           map[string]any `json:"attrs"`
+}
+
+func (s *Store) IssueChecklist(ctx context.Context, in IssueChecklistInput) (*EmployeeChecklist, error) {
+	employeeNo, templateCode := in.EmployeeNo, in.TemplateCode
+	referenceDate, notes := in.ReferenceDate, in.Notes
 	refDate, err := time.Parse("2006-01-02", referenceDate)
 	if err != nil {
 		return nil, ErrBadInput
@@ -155,11 +181,18 @@ func (s *Store) IssueChecklist(ctx context.Context, employeeNo, templateCode, re
 	}
 	defer tx.Rollback(ctx)
 
+	attrs := []byte("{}")
+	if in.Attrs != nil {
+		attrs, _ = json.Marshal(in.Attrs)
+	}
+
 	var checklistID uuid.UUID
 	err = tx.QueryRow(ctx, `
-		INSERT INTO erp_employee_checklists (employee_id, template_id, kind, reference_date, notes)
-		VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		employeeID, templateID, kind, refDate, notes).Scan(&checklistID)
+		INSERT INTO erp_employee_checklists
+			(employee_id, template_id, kind, reference_date, notes, buddy_employee_no, attrs)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		employeeID, templateID, kind, refDate, notes,
+		strings.TrimSpace(in.BuddyEmployeeNo), attrs).Scan(&checklistID)
 	if err != nil {
 		// The partial unique index is what turns a second issue into a clear
 		// conflict instead of two competing checklists.
@@ -188,12 +221,14 @@ func (s *Store) IssueChecklist(ctx context.Context, employeeNo, templateCode, re
 }
 
 const checklistColumns = `cl.id, e.employee_no, e.first_name || ' ' || e.last_name, t.code,
-	cl.kind, cl.status, cl.reference_date, cl.completed_on, cl.notes, cl.created_at,
+	cl.kind, cl.status, cl.reference_date, cl.completed_on, cl.notes,
+	cl.buddy_employee_no, e.job_title, COALESCE(d.code, ''), cl.attrs, cl.created_at,
 	(SELECT COUNT(*)::int FROM erp_employee_checklist_items i
 	 WHERE i.checklist_id = cl.id AND i.required AND i.status NOT IN ('done','not_applicable'))`
 
 const checklistFrom = `FROM erp_employee_checklists cl
 	JOIN erp_employees e ON e.id = cl.employee_id
+	LEFT JOIN erp_departments d ON d.id = e.department_id
 	LEFT JOIN erp_checklist_templates t ON t.id = cl.template_id`
 
 // scanChecklist is the single reader for checklistColumns. Both the single-row
@@ -201,14 +236,18 @@ const checklistFrom = `FROM erp_employee_checklists cl
 // that knows its shape.
 func scanChecklist(row pgx.Row) (*EmployeeChecklist, error) {
 	var c EmployeeChecklist
+	var attrs []byte
 	err := row.Scan(&c.ID, &c.EmployeeNo, &c.EmployeeName, &c.TemplateCode, &c.Kind,
-		&c.Status, &c.ReferenceDate, &c.CompletedOn, &c.Notes, &c.CreatedAt, &c.Outstanding)
+		&c.Status, &c.ReferenceDate, &c.CompletedOn, &c.Notes,
+		&c.BuddyEmployeeNo, &c.Position, &c.Department, &attrs,
+		&c.CreatedAt, &c.Outstanding)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	c.Attrs = scanAttrs(attrs)
 	return &c, nil
 }
 

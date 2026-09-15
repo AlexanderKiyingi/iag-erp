@@ -85,6 +85,12 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.PATCH("/leave-requests/:id", appmw.RequirePermission("erp.change_leave"), api.UpdateLeaveRequest)
 		v1.POST("/leave-requests/:id/decide", appmw.RequireAnyPermission("erp.approve_leave", "erp.admin.read"), api.DecideLeaveRequest)
 		v1.POST("/leave-requests/:id/cancel", appmw.RequirePermission("erp.change_leave"), api.CancelLeaveRequest)
+		// The approval desks. Guarded here with the weakest permission any hop
+		// can need; the handler raises that to erp.approve_leave for the hops
+		// that decide, because route middleware cannot see which desk the body
+		// asks for.
+		v1.POST("/leave-requests/:id/chain", appmw.RequirePermission("erp.change_leave"), api.LeaveRequestChain)
+		v1.GET("/leave-requests/:id/approvals", appmw.RequirePermission("erp.view_leave"), api.ListLeaveRequestApprovals)
 
 		v1.GET("/attendance", appmw.RequirePermission("erp.view_attendance"), api.ListAttendance)
 		v1.POST("/attendance", appmw.RequirePermission("erp.change_attendance"), api.UpsertAttendance)
@@ -175,6 +181,13 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			// separation anybody holding that grant can undo.
 			v1.POST("/payroll/runs/:id/approve", appmw.RequirePermission("erp.approve_payroll"), api.ApprovePayrollRun)
 			v1.POST("/payroll/runs/:id/post", appmw.RequirePermission("erp.post_payroll"), api.PostPayrollRun)
+			// The approval desks. Guarded here with erp.run_payroll, the
+			// weakest permission any hop can need; the handler raises that to
+			// erp.approve_payroll for CEO sign-off and erp.post_payroll for the
+			// Finance release, because route middleware runs before the body is
+			// read and cannot know which desk is being asked for.
+			v1.POST("/payroll/runs/:id/chain", appmw.RequirePermission("erp.run_payroll"), api.PayrollRunChain)
+			v1.GET("/payroll/runs/:id/approvals", appmw.RequirePermission("erp.view_payroll"), api.ListPayrollRunApprovals)
 		}
 
 		v1.GET("/reports", appmw.RequirePermission("erp.view_hr_overview"), api.HRReport)
@@ -184,6 +197,15 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.POST("/setup-items", appmw.RequirePermission("erp.change_hr_records"), api.CreateSetupItem)
 		v1.PATCH("/setup-items/:id", appmw.RequirePermission("erp.change_hr_records"), api.UpdateSetupItem)
 		v1.DELETE("/setup-items/:id", appmw.RequirePermission("erp.change_hr_records"), api.DeleteSetupItem)
+
+		// Attachments. Guarded by the HR record permissions rather than by
+		// permissions of their own: a file is evidence for a record, and
+		// whoever may read the record may read what is attached to it. A
+		// separate grant would be a second answer to the same question.
+		v1.GET("/attachments", appmw.RequirePermission("erp.view_hr_records"), api.ListAttachments)
+		v1.POST("/attachments", appmw.RequirePermission("erp.change_hr_records"), api.UploadAttachments)
+		v1.GET("/attachments/:id", appmw.RequirePermission("erp.view_hr_records"), api.DownloadAttachment)
+		v1.DELETE("/attachments/:id", appmw.RequirePermission("erp.change_hr_records"), api.DeleteAttachment)
 
 		v1.GET("/integrations/status", appmw.RequirePermission("erp.view_hr_overview"), api.IntegrationStatus)
 		v1.POST("/integrations/production-orders/webhook", appmw.RequirePermission("erp.change_production_order"), api.ProductionOrderWebhook)

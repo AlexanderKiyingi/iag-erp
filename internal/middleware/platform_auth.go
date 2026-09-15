@@ -116,25 +116,37 @@ func PlatformClaims(c *gin.Context) (*authclient.Claims, bool) {
 	return cl, ok
 }
 
+/*
+AllowsPermission answers the same question RequirePermission does, for a handler
+that cannot know the codename until it has read the request body.
+
+The approval chain is that case: which permission a hop needs depends on which
+desk it moves to — an intermediate review is erp.run_payroll, CEO sign-off is
+erp.approve_payroll and the Finance release is erp.post_payroll — and route
+middleware runs before anything has parsed the body.
+
+RequirePermission delegates here so a handler-side check and a route-side one
+cannot drift apart. Separation of duties enforced by two implementations of the
+same rule is separation that lasts until they disagree.
+*/
+func AllowsPermission(c *gin.Context, code string) bool {
+	claims, ok := PlatformClaims(c)
+	if !ok {
+		// No claims at all: strict RBAC refuses, lenient mode is a local or
+		// unwired deployment and lets it through.
+		return !isStrictRBAC(c)
+	}
+	if claims.IsSuperuser || claims.IsStaff || claims.HasPermission(code) {
+		return true
+	}
+	perms, _ := c.Get(ctxkeys.Permissions)
+	list, _ := perms.([]string)
+	return len(list) == 0 && !isStrictRBAC(c)
+}
+
 func RequirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := PlatformClaims(c)
-		if !ok {
-			if isStrictRBAC(c) {
-				apierr.WriteWith(c, http.StatusForbidden, apierr.CodeForbidden,
-					"permission denied: "+code, gin.H{"required_permission": code})
-				return
-			}
-			c.Next()
-			return
-		}
-		if claims.IsSuperuser || claims.IsStaff || claims.HasPermission(code) {
-			c.Next()
-			return
-		}
-		perms, _ := c.Get(ctxkeys.Permissions)
-		list, _ := perms.([]string)
-		if len(list) == 0 && !isStrictRBAC(c) {
+		if AllowsPermission(c, code) {
 			c.Next()
 			return
 		}

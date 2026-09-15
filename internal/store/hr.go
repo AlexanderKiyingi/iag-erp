@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,9 @@ type LeaveRequest struct {
 	// the employee is told no and cannot be told why.
 	DecisionNote  string     `json:"decision_note"`
 	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	// ChainStage is which approval desk the request is sitting at while it is
+	// still pending. Empty means it never went through them.
+	ChainStage    string     `json:"chain_stage"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
@@ -95,6 +99,22 @@ type AttendanceRecord struct {
 	Location     string     `json:"location"`
 	Method       string     `json:"method"`
 	Notes        string     `json:"notes"`
+	// Which department and block the day was worked for. A casual moved between
+	// departments is exactly the row payroll has to allocate, so it belongs here
+	// rather than being inferred from the employee's current department.
+	DepartmentCode string   `json:"department_code"`
+	Block          string   `json:"block"`
+	// The geofenced check-in evidence, as columns rather than packed into notes.
+	// Nullable: a punch entered by an HR officer from a paper register has no
+	// GPS fix, and 0,0 is a real place rather than a way of saying "unknown".
+	Latitude         *float64 `json:"latitude,omitempty"`
+	Longitude        *float64 `json:"longitude,omitempty"`
+	AccuracyM        *float64 `json:"accuracy_m,omitempty"`
+	WifiBSSID        string   `json:"wifi_bssid"`
+	VerificationNote string   `json:"verification_note"`
+	// Hours is computed from the two clocks on read, never stored: a copy
+	// disagrees with them the first time either is corrected.
+	Hours        float64    `json:"hours"`
 	CreatedAt    time.Time  `json:"created_at"`
 }
 
@@ -850,7 +870,9 @@ func (s *Store) ListAttendanceScoped(ctx context.Context, workDate, plantCode, d
 	}
 	q := `
 		SELECT a.id, a.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
-		       a.work_date, a.clock_in, a.clock_out, a.status, a.location, a.method, a.notes, a.created_at
+		       a.work_date, a.clock_in, a.clock_out, a.status, a.location, a.method, a.notes,
+		       a.department_code, a.block, a.latitude, a.longitude, a.accuracy_m,
+		       a.wifi_bssid, a.verification_note, a.created_at
 		FROM erp_attendance_records a
 		JOIN erp_employees e ON e.id = a.employee_id
 		LEFT JOIN erp_departments d ON d.id = e.department_id
@@ -888,12 +910,33 @@ func (s *Store) ListAttendanceScoped(ctx context.Context, workDate, plantCode, d
 	for rows.Next() {
 		var a AttendanceRecord
 		if err := rows.Scan(&a.ID, &a.EmployeeID, &a.EmployeeNo, &a.EmployeeName,
-			&a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.Location, &a.Method, &a.Notes, &a.CreatedAt); err != nil {
+			&a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.Location, &a.Method, &a.Notes,
+			&a.DepartmentCode, &a.Block, &a.Latitude, &a.Longitude, &a.AccuracyM,
+			&a.WifiBSSID, &a.VerificationNote, &a.CreatedAt); err != nil {
 			return nil, err
 		}
+		a.Hours = attendanceHours(a.ClockIn, a.ClockOut)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+/*
+attendanceHours is clock_out minus clock_in, in hours, to two decimals.
+
+Computed on read rather than stored. A stored copy is a third number that has to
+agree with the two it came from, and it stops agreeing the first time either
+clock is corrected -- at which point the day's pay and the day's hours disagree
+and nothing says which is right.
+
+Zero when either clock is missing: a day with no check-out has no duration yet,
+and guessing one would put hours against a shift still running.
+*/
+func attendanceHours(in, out *time.Time) float64 {
+	if in == nil || out == nil || !out.After(*in) {
+		return 0
+	}
+	return math.Round(out.Sub(*in).Hours()*100) / 100
 }
 
 type CreateAttendanceInput struct {
@@ -905,6 +948,14 @@ type CreateAttendanceInput struct {
 	Location   string `json:"location"`
 	Method     string `json:"method"`
 	Notes      string `json:"notes"`
+
+	DepartmentCode   string   `json:"department_code"`
+	Block            string   `json:"block"`
+	Latitude         *float64 `json:"latitude"`
+	Longitude        *float64 `json:"longitude"`
+	AccuracyM        *float64 `json:"accuracy_m"`
+	WifiBSSID        string   `json:"wifi_bssid"`
+	VerificationNote string   `json:"verification_note"`
 }
 
 func (s *Store) UpsertAttendance(ctx context.Context, in CreateAttendanceInput) (*AttendanceRecord, error) {
@@ -942,16 +993,32 @@ func (s *Store) UpsertAttendance(ctx context.Context, in CreateAttendanceInput) 
 	}
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO erp_attendance_records (employee_id, work_date, clock_in, clock_out, status, location, method, notes)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		INSERT INTO erp_attendance_records
+			(employee_id, work_date, clock_in, clock_out, status, location, method, notes,
+			 department_code, block, latitude, longitude, accuracy_m, wifi_bssid, verification_note)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (employee_id, work_date) DO UPDATE SET
 		  clock_in = COALESCE(EXCLUDED.clock_in, erp_attendance_records.clock_in),
 		  clock_out = COALESCE(EXCLUDED.clock_out, erp_attendance_records.clock_out),
 		  status = EXCLUDED.status,
 		  location = COALESCE(NULLIF(EXCLUDED.location, ''), erp_attendance_records.location),
 		  method = COALESCE(NULLIF(EXCLUDED.method, ''), erp_attendance_records.method),
-		  notes = EXCLUDED.notes
-		RETURNING id`, empID, workDate, clockIn, clockOut, status, in.Location, in.Method, in.Notes).Scan(&id)
+		  notes = EXCLUDED.notes,
+		  department_code = COALESCE(NULLIF(EXCLUDED.department_code, ''), erp_attendance_records.department_code),
+		  block = COALESCE(NULLIF(EXCLUDED.block, ''), erp_attendance_records.block),
+		  -- The check-out punch carries its own fix, and it is the later of the
+		  -- two, so it replaces. A row upserted without one keeps what it had
+		  -- rather than losing the check-in's evidence.
+		  latitude = COALESCE(EXCLUDED.latitude, erp_attendance_records.latitude),
+		  longitude = COALESCE(EXCLUDED.longitude, erp_attendance_records.longitude),
+		  accuracy_m = COALESCE(EXCLUDED.accuracy_m, erp_attendance_records.accuracy_m),
+		  wifi_bssid = COALESCE(NULLIF(EXCLUDED.wifi_bssid, ''), erp_attendance_records.wifi_bssid),
+		  verification_note = COALESCE(NULLIF(EXCLUDED.verification_note, ''), erp_attendance_records.verification_note)
+		RETURNING id`,
+		empID, workDate, clockIn, clockOut, status, in.Location, in.Method, in.Notes,
+		strings.ToUpper(strings.TrimSpace(in.DepartmentCode)), strings.TrimSpace(in.Block),
+		in.Latitude, in.Longitude, in.AccuracyM,
+		strings.TrimSpace(in.WifiBSSID), strings.TrimSpace(in.VerificationNote)).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
