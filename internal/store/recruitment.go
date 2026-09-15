@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +29,15 @@ type JobRequisition struct {
 	HiringManagerNo *string    `json:"hiring_manager_employee_no,omitempty"`
 	Justification   string     `json:"justification"`
 	TargetStartDate *time.Time `json:"target_start_date,omitempty"`
+	// The band this role was approved at. Nullable rather than zero: a
+	// requisition raised before 021 has no band, and 0 would state one.
+	SalaryMin       *float64   `json:"salary_min,omitempty"`
+	SalaryMax       *float64   `json:"salary_max,omitempty"`
+	SalaryCurrency  string     `json:"salary_currency"`
+	PostedOn        *time.Time `json:"posted_on,omitempty"`
+	// Attrs is the raising desk's own record of the role. Same shape and same
+	// reasoning as Employee.Attrs and Department.Attrs.
+	Attrs           map[string]any `json:"attrs"`
 	ApprovedBy      *string    `json:"approved_by_employee_no,omitempty"`
 	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
 	OpenedOn        *time.Time `json:"opened_on,omitempty"`
@@ -77,6 +87,7 @@ type ApplicationEvent struct {
 const requisitionColumns = `r.id, r.requisition_no, r.title, d.code, r.employment_type,
 	r.headcount, r.status, m.employee_no, r.justification, r.target_start_date,
 	a.employee_no, r.approved_at, r.opened_on, r.closed_on,
+	r.salary_min, r.salary_max, r.salary_currency, r.posted_on, r.attrs,
 	(SELECT COUNT(*)::int FROM erp_applications ap WHERE ap.requisition_id = r.id AND ap.stage = 'hired'),
 	r.created_at, r.updated_at`
 
@@ -87,16 +98,19 @@ const requisitionFrom = `FROM erp_job_requisitions r
 
 func scanRequisition(row pgx.Row) (*JobRequisition, error) {
 	var r JobRequisition
+	var attrs []byte
 	err := row.Scan(&r.ID, &r.RequisitionNo, &r.Title, &r.DepartmentCode, &r.EmploymentType,
 		&r.Headcount, &r.Status, &r.HiringManagerNo, &r.Justification, &r.TargetStartDate,
-		&r.ApprovedBy, &r.ApprovedAt, &r.OpenedOn, &r.ClosedOn, &r.FilledCount,
-		&r.CreatedAt, &r.UpdatedAt)
+		&r.ApprovedBy, &r.ApprovedAt, &r.OpenedOn, &r.ClosedOn,
+		&r.SalaryMin, &r.SalaryMax, &r.SalaryCurrency, &r.PostedOn, &attrs,
+		&r.FilledCount, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	r.Attrs = scanAttrs(attrs)
 	return &r, nil
 }
 
@@ -108,6 +122,13 @@ type CreateRequisitionInput struct {
 	HiringManagerNo string `json:"hiring_manager_employee_no"`
 	Justification   string `json:"justification"`
 	TargetStartDate string `json:"target_start_date"`
+	// The band, which an offer is later made against. Pointers so that "not
+	// stated" and "zero" stay different answers.
+	SalaryMin       *float64       `json:"salary_min"`
+	SalaryMax       *float64       `json:"salary_max"`
+	SalaryCurrency  string         `json:"salary_currency"`
+	PostedOn        string         `json:"posted_on"`
+	Attrs           map[string]any `json:"attrs"`
 }
 
 func (s *Store) CreateRequisition(ctx context.Context, in CreateRequisitionInput) (*JobRequisition, error) {
@@ -139,20 +160,40 @@ func (s *Store) CreateRequisition(ctx context.Context, in CreateRequisitionInput
 		target = &t
 	}
 
+	var posted *time.Time
+	if in.PostedOn != "" {
+		t, err := time.Parse("2006-01-02", in.PostedOn)
+		if err != nil {
+			return nil, ErrBadInput
+		}
+		posted = &t
+	}
+
+	currency := strings.ToUpper(strings.TrimSpace(in.SalaryCurrency))
+	if currency == "" {
+		currency = "UGX"
+	}
+	attrs := []byte("{}")
+	if in.Attrs != nil {
+		attrs, _ = json.Marshal(in.Attrs)
+	}
+
 	reqNo := fmt.Sprintf("REQ-%s-%s", time.Now().UTC().Format("2006"), strings.ToUpper(uuid.NewString()[:6]))
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO erp_job_requisitions
 			(requisition_no, title, department_id, employment_type, headcount,
-			 hiring_manager_id, justification, target_start_date)
+			 hiring_manager_id, justification, target_start_date,
+			 salary_min, salary_max, salary_currency, posted_on, attrs)
 		VALUES ($1, $2,
 			(SELECT id FROM erp_departments WHERE code = UPPER(NULLIF($3,''))),
 			$4, $5,
 			(SELECT id FROM erp_employees WHERE employee_no = NULLIF($6,'')),
-			$7, $8)
+			$7, $8, $9, $10, $11, $12, $13)
 		RETURNING id`,
 		reqNo, in.Title, in.DepartmentCode, employmentType, in.Headcount,
-		in.HiringManagerNo, in.Justification, target).Scan(&id)
+		in.HiringManagerNo, in.Justification, target,
+		in.SalaryMin, in.SalaryMax, currency, posted, attrs).Scan(&id)
 	if err != nil {
 		return nil, err
 	}

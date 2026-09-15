@@ -73,6 +73,10 @@ type ExternalRunInput struct {
 	Notes       string                 `json:"notes"`
 	Engine      string                 `json:"engine"`
 	Payslips    []ExternalPayslipInput `json:"payslips"`
+	// Attrs is how the caller computed it -- overrides applied, default working
+	// days assumed, the payslip ids it minted. Kept so the figures can be
+	// explained afterwards; never read back into the arithmetic.
+	Attrs       map[string]any         `json:"attrs"`
 }
 
 // balanced reports whether a payslip's own totals agree with its parts.
@@ -200,10 +204,11 @@ func (s *Store) RecordExternalPayrollRun(
 	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO erp_payroll_runs
-			(run_ref, period, status, currency, created_by_employee_no, notes, source, source_engine)
-		VALUES ($1, $2, 'draft', $3, NULLIF($4,''), $5, 'external', $6)
+			(run_ref, period, status, currency, created_by_employee_no, notes, source, source_engine, attrs)
+		VALUES ($1, $2, 'draft', $3, NULLIF($4,''), $5, 'external', $6, $7)
 		RETURNING id`,
-		run.RunRef, period, currency, createdBy, in.Notes, run.SourceEngine).Scan(&run.ID); err != nil {
+		run.RunRef, period, currency, createdBy, in.Notes, run.SourceEngine,
+		marshalAttrs(in.Attrs)).Scan(&run.ID); err != nil {
 		return nil, nil, err
 	}
 

@@ -113,9 +113,10 @@ func (a *API) CreatePayrollRun(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Period   string `json:"period"`
-		Currency string `json:"currency"`
-		Notes    string `json:"notes"`
+		Period   string         `json:"period"`
+		Currency string         `json:"currency"`
+		Notes    string         `json:"notes"`
+		Attrs    map[string]any `json:"attrs"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -125,7 +126,7 @@ func (a *API) CreatePayrollRun(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "period is required (YYYY-MM)"})
 		return
 	}
-	item, err := a.Store.CreatePayrollRun(c.Request.Context(), body.Period, body.Currency, preparer, body.Notes)
+	item, err := a.Store.CreatePayrollRun(c.Request.Context(), body.Period, body.Currency, preparer, body.Notes, body.Attrs)
 	if err != nil {
 		writePayrollError(c, err)
 		return

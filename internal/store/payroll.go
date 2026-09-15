@@ -70,6 +70,16 @@ type PayrollRun struct {
 	// A payslip that has to be explained later needs to know which.
 	Source               string     `json:"source"`
 	SourceEngine         string     `json:"source_engine"`
+	// ChainStage is which approval desk the run is sitting at while it is still
+	// a draft. Empty means it never went through them -- true of every run
+	// created before the chain existed, and of any created by another client.
+	ChainStage           string     `json:"chain_stage"`
+	// Attrs is how the run was computed, as the client that computed it
+	// recorded: per-employee overrides, the default working days assumed, the
+	// payslip ids produced. The totals are NOT here -- they are columns, and a
+	// second copy arriving from a client could disagree with the payslips it is
+	// meant to summarise.
+	Attrs                map[string]any `json:"attrs"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	// Skipped names the employees left out and why. A run that silently covered
@@ -94,21 +104,23 @@ type Payslip struct {
 const payrollRunColumns = `id, run_ref, period, status, currency, employee_count,
 	gross, taxable_gross, paye, nssf_employee, nssf_employer, other_deductions, net,
 	created_by_employee_no, approved_by_employee_no, approved_at, posted_at, notes,
-	source, source_engine, created_at, updated_at`
+	source, source_engine, chain_stage, attrs, created_at, updated_at`
 
 func scanPayrollRun(row pgx.Row) (*PayrollRun, error) {
 	var r PayrollRun
+	var attrs []byte
 	err := row.Scan(&r.ID, &r.RunRef, &r.Period, &r.Status, &r.Currency, &r.EmployeeCount,
 		&r.Gross, &r.TaxableGross, &r.PAYE, &r.NSSFEmployee, &r.NSSFEmployer,
 		&r.OtherDeductions, &r.Net, &r.CreatedByEmployeeNo, &r.ApprovedByEmployeeNo,
 		&r.ApprovedAt, &r.PostedAt, &r.Notes, &r.Source, &r.SourceEngine,
-		&r.CreatedAt, &r.UpdatedAt)
+		&r.ChainStage, &attrs, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	r.Attrs = scanAttrs(attrs)
 	return &r, nil
 }
 
@@ -129,7 +141,7 @@ type payrollEmployee struct {
 // reworked as timesheets and allowances land, and keeping every intermediate
 // attempt would leave nobody able to say which draft was the one under review.
 // A posted period is refused outright.
-func (s *Store) CreatePayrollRun(ctx context.Context, period, currency, createdBy, notes string) (*PayrollRun, error) {
+func (s *Store) CreatePayrollRun(ctx context.Context, period, currency, createdBy, notes string, attrs map[string]any) (*PayrollRun, error) {
 	periodStart, periodEnd, err := PeriodBounds(period)
 	if err != nil {
 		return nil, err
@@ -196,9 +208,11 @@ func (s *Store) CreatePayrollRun(ctx context.Context, period, currency, createdB
 		Notes:    notes,
 	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO erp_payroll_runs (run_ref, period, status, currency, created_by_employee_no, notes)
-		VALUES ($1, $2, 'draft', $3, NULLIF($4,''), $5)
-		RETURNING id`, run.RunRef, period, currency, createdBy, notes).Scan(&run.ID); err != nil {
+		INSERT INTO erp_payroll_runs
+			(run_ref, period, status, currency, created_by_employee_no, notes, attrs)
+		VALUES ($1, $2, 'draft', $3, NULLIF($4,''), $5, $6)
+		RETURNING id`, run.RunRef, period, currency, createdBy, notes,
+		marshalAttrs(attrs)).Scan(&run.ID); err != nil {
 		return nil, err
 	}
 

@@ -15,8 +15,17 @@ import (
 
 // hrModuleCheckConstraint is the CHECK that bounds erp_hr_module_records.module.
 // Named because two things have to agree about it: HRModuleKeys below, and the
-// constraint itself (migrations/007, widened by 012).
+// constraint itself (migrations/007, widened by 012 and 019).
 const hrModuleCheckConstraint = "erp_hr_module_records_module_check"
+
+// hrModuleKeysMigration is the migration that last widened that CHECK, and so
+// the one an operator seeing ErrSchemaBehind needs to have applied.
+//
+// One constant rather than a literal in the error, because it is also what the
+// drift test reads: the constraint that wins at runtime is the one in the
+// newest migration, and a test pinned to an older file passes while the
+// deployment disagrees with the build. Update it with each widening.
+const hrModuleKeysMigration = "019_hr_module_keys_v2.sql"
 
 /*
 hrModuleWriteErr turns a module CHECK violation into ErrSchemaBehind.
@@ -35,8 +44,8 @@ func hrModuleWriteErr(err error) error {
 		pgErr.ConstraintName == hrModuleCheckConstraint {
 		return fmt.Errorf(
 			"%w: module is allowed by this build but rejected by %s "+
-				"(apply migrations/012_hr_module_keys.sql)",
-			ErrSchemaBehind, hrModuleCheckConstraint,
+				"(apply migrations/%s)",
+			ErrSchemaBehind, hrModuleCheckConstraint, hrModuleKeysMigration,
 		)
 	}
 	return err
@@ -75,10 +84,10 @@ func (s *Store) HRModuleConstraintGap(ctx context.Context) ([]string, error) {
 // HR module keys served by the generic records table.
 //
 // Must stay in step with the CHECK constraint on erp_hr_module_records
-// (migrations/007_hr_modules.sql, widened by 012_hr_module_keys.sql). A key
-// here that the constraint rejects fails on write with a database error instead
-// of the 400 this list is meant to produce; a key in the constraint but not
-// here is simply unreachable.
+// (migrations/007_hr_modules.sql, widened by 012_hr_module_keys.sql and
+// 019_hr_module_keys_v2.sql). A key here that the constraint rejects fails on
+// write with a database error instead of the 400 this list is meant to produce;
+// a key in the constraint but not here is simply unreachable.
 var HRModuleKeys = []string{
 	"shifts", "recruitment", "onboarding", "performance", "training",
 	"helpdesk", "documents", "disciplinary", "assets", "offboarding",
@@ -87,6 +96,11 @@ var HRModuleKeys = []string{
 	// behind working-day leave, and payroll reference data.
 	"sites", "blocks", "holidays",
 	"payslip-items", "recurring-payslips", "statutory-remittances",
+	// The IAG HR app, second round. These four shipped in the frontend's
+	// adapter registry without ever being added here, so every call against
+	// them -- reads included -- was a 400 from IsHRModule.
+	"employee-profiles", "performance-kpis", "training-and-development",
+	"contracts",
 }
 
 func IsHRModule(module string) bool {

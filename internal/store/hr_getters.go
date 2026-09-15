@@ -68,7 +68,8 @@ func (s *Store) getLeaveRequestByID(ctx context.Context, id uuid.UUID) (*LeaveRe
 // approval queue alike.
 const leaveRequestColumns = `lr.id, lr.employee_id, e.employee_no, e.first_name || ' ' || e.last_name,
 	lr.leave_type_id, lt.code, lt.name, lr.starts_on, lr.ends_on, lr.days,
-	lr.reason, lr.status, lr.approver_ref, lr.decision_note, lr.decided_at, lr.created_at`
+	lr.reason, lr.status, lr.approver_ref, lr.decision_note, lr.decided_at,
+	lr.chain_stage, lr.created_at`
 
 const leaveRequestFrom = `FROM erp_leave_requests lr
 	JOIN erp_employees e ON e.id = lr.employee_id
@@ -80,7 +81,7 @@ func scanLeaveRequest(row pgx.Row) (*LeaveRequest, error) {
 	err := row.Scan(&lr.ID, &lr.EmployeeID, &lr.EmployeeNo, &lr.EmployeeName,
 		&lr.LeaveTypeID, &lr.LeaveTypeCode, &lr.LeaveTypeName, &lr.StartsOn, &lr.EndsOn,
 		&lr.Days, &lr.Reason, &lr.Status, &lr.ApproverRef, &lr.DecisionNote,
-		&lr.DecidedAt, &lr.CreatedAt)
+		&lr.DecidedAt, &lr.ChainStage, &lr.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound

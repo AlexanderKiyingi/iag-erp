@@ -25,22 +25,56 @@ func TestParseOptionalUserID(t *testing.T) {
 	}
 }
 
+// hrModuleKeysMigration has to name the NEWEST migration that redefines the
+// module CHECK, because that is the one in force once they have all run. A
+// stale constant would point the drift test at a superseded constraint and the
+// operator error at a migration that no longer carries the keys -- both would
+// pass while the deployment disagreed with the build.
+func TestHRModuleKeysMigrationIsTheNewestOne(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "migrations"))
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	newest := ""
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join("..", "..", "migrations", e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		// The runner applies files in lexical order, so the last one that
+		// redefines the constraint is the one left standing.
+		if strings.Contains(string(body), "CHECK (module IN (") && e.Name() > newest {
+			newest = e.Name()
+		}
+	}
+	if newest == "" {
+		t.Fatal("no migration defines CHECK (module IN (...))")
+	}
+	if newest != hrModuleKeysMigration {
+		t.Errorf("hrModuleKeysMigration is %q but the newest module CHECK is in %q",
+			hrModuleKeysMigration, newest)
+	}
+}
+
 // The Go allowlist and the database CHECK bound the same thing from two sides.
 // Drift is silent in the direction that matters: a key IsHRModule accepts but
 // the constraint rejects turns a clean 400 into a 500 on the first write.
 func TestHRModuleKeysMatchMigrationConstraint(t *testing.T) {
-	sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", "012_hr_module_keys.sql"))
+	sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", hrModuleKeysMigration))
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}
 	body := string(sql)
 	start := strings.LastIndex(body, "CHECK (module IN (")
 	if start < 0 {
-		t.Fatal("012_hr_module_keys.sql has no CHECK (module IN (...))")
+		t.Fatalf("%s has no CHECK (module IN (...))", hrModuleKeysMigration)
 	}
 	end := strings.Index(body[start:], "))")
 	if end < 0 {
-		t.Fatal("unterminated CHECK in 012_hr_module_keys.sql")
+		t.Fatalf("unterminated CHECK in %s", hrModuleKeysMigration)
 	}
 	constraint := body[start : start+end]
 
@@ -75,7 +109,7 @@ func TestHRModuleWriteErrClassifiesTheConstraintViolation(t *testing.T) {
 	if !errors.Is(got, ErrSchemaBehind) {
 		t.Fatalf("module check violation should map to ErrSchemaBehind, got %v", got)
 	}
-	if !strings.Contains(got.Error(), "012_hr_module_keys.sql") {
+	if !strings.Contains(got.Error(), hrModuleKeysMigration) {
 		t.Errorf("the error should name the migration to apply: %v", got)
 	}
 
