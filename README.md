@@ -22,6 +22,7 @@ Enterprise resource planning microservice for the IAG platform — HR (employees
 | PATCH | `/departments/:code` | `erp.change_employee` | Update department |
 | GET/POST | `/employees` | view/change employee | Employee roster (`?search`, `?limit`, `?offset`) |
 | GET | `/employees/by-operator/:ref` | `erp.view_employee` | Resolve HR record from production operator ref |
+| GET | `/operator-roster` | `erp.view_employee` or an `ERP_SERVICE_CALLERS` service token | Employees with an `operator_ref` (no contact/pay fields), paged — what iag-production projects into its operator registry |
 | GET/PATCH | `/employees/:employee_no` | view/change employee | Employee detail |
 | GET | `/employees/:employee_no/leave-balance` | `erp.view_leave` | Leave balance by type/year |
 | GET | `/leave-types` | `erp.view_leave` | Leave type catalogue |
