@@ -63,28 +63,28 @@ type LeaveType struct {
 }
 
 type LeaveRequest struct {
-	ID            uuid.UUID  `json:"id"`
-	EmployeeID    uuid.UUID  `json:"employee_id"`
-	EmployeeNo    string     `json:"employee_no"`
-	EmployeeName  string     `json:"employee_name"`
-	LeaveTypeID   uuid.UUID  `json:"leave_type_id"`
-	LeaveTypeCode string     `json:"leave_type_code"`
-	LeaveTypeName string     `json:"leave_type_name"`
-	StartsOn      time.Time  `json:"starts_on"`
-	EndsOn        time.Time  `json:"ends_on"`
-	Days          float64    `json:"days"`
-	Reason        string     `json:"reason"`
-	Status        string     `json:"status"`
-	ApproverRef   *string    `json:"approver_ref,omitempty"`
+	ID            uuid.UUID `json:"id"`
+	EmployeeID    uuid.UUID `json:"employee_id"`
+	EmployeeNo    string    `json:"employee_no"`
+	EmployeeName  string    `json:"employee_name"`
+	LeaveTypeID   uuid.UUID `json:"leave_type_id"`
+	LeaveTypeCode string    `json:"leave_type_code"`
+	LeaveTypeName string    `json:"leave_type_name"`
+	StartsOn      time.Time `json:"starts_on"`
+	EndsOn        time.Time `json:"ends_on"`
+	Days          float64   `json:"days"`
+	Reason        string    `json:"reason"`
+	Status        string    `json:"status"`
+	ApproverRef   *string   `json:"approver_ref,omitempty"`
 	// DecisionNote is why the request was decided. Every approval desk collects
 	// a comment, and a rejection without one is the case where it matters most:
 	// the employee is told no and cannot be told why.
-	DecisionNote  string     `json:"decision_note"`
-	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	DecisionNote string     `json:"decision_note"`
+	DecidedAt    *time.Time `json:"decided_at,omitempty"`
 	// ChainStage is which approval desk the request is sitting at while it is
 	// still pending. Empty means it never went through them.
-	ChainStage    string     `json:"chain_stage"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ChainStage string    `json:"chain_stage"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type AttendanceRecord struct {
@@ -102,8 +102,8 @@ type AttendanceRecord struct {
 	// Which department and block the day was worked for. A casual moved between
 	// departments is exactly the row payroll has to allocate, so it belongs here
 	// rather than being inferred from the employee's current department.
-	DepartmentCode string   `json:"department_code"`
-	Block          string   `json:"block"`
+	DepartmentCode string `json:"department_code"`
+	Block          string `json:"block"`
 	// The geofenced check-in evidence, as columns rather than packed into notes.
 	// Nullable: a punch entered by an HR officer from a paper register has no
 	// GPS fix, and 0,0 is a real place rather than a way of saying "unknown".
@@ -114,8 +114,8 @@ type AttendanceRecord struct {
 	VerificationNote string   `json:"verification_note"`
 	// Hours is computed from the two clocks on read, never stored: a copy
 	// disagrees with them the first time either is corrected.
-	Hours        float64    `json:"hours"`
-	CreatedAt    time.Time  `json:"created_at"`
+	Hours     float64   `json:"hours"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type HRCounts struct {
@@ -297,21 +297,53 @@ func (s *Store) GetEmployee(ctx context.Context, employeeNo string) (*Employee, 
 }
 
 type CreateEmployeeInput struct {
-	EmployeeNo        string         `json:"employee_no"`
-	FirstName         string         `json:"first_name"`
-	LastName          string         `json:"last_name"`
-	Email             string         `json:"email"`
-	Phone             string         `json:"phone"`
-	DepartmentCode    string         `json:"department_code"`
-	JobTitle          string         `json:"job_title"`
-	EmploymentType    string         `json:"employment_type"`
-	HireDate          string         `json:"hire_date"`
-	BirthDate         string         `json:"birth_date"`
-	PlantCode         string         `json:"plant_code"`
-	OperatorRef       string         `json:"operator_ref"`
-	UserID            string         `json:"user_id"`
-	ManagerEmployeeNo string         `json:"manager_employee_no"`
-	Attrs             map[string]any `json:"attrs"`
+	EmployeeNo        string `json:"employee_no"`
+	FirstName         string `json:"first_name"`
+	LastName          string `json:"last_name"`
+	Email             string `json:"email"`
+	Phone             string `json:"phone"`
+	DepartmentCode    string `json:"department_code"`
+	JobTitle          string `json:"job_title"`
+	EmploymentType    string `json:"employment_type"`
+	HireDate          string `json:"hire_date"`
+	BirthDate         string `json:"birth_date"`
+	PlantCode         string `json:"plant_code"`
+	OperatorRef       string `json:"operator_ref"`
+	UserID            string `json:"user_id"`
+	ManagerEmployeeNo string `json:"manager_employee_no"`
+	// Status the person starts in. Optional: empty is "active". A new hire on
+	// probation was landing as active because this field did not exist and
+	// the value the HR app sent was dropped on the floor.
+	Status string         `json:"status"`
+	Attrs  map[string]any `json:"attrs"`
+}
+
+// optionalDate parses a YYYY-MM-DD field that may be absent. An empty string
+// is nil (leave the column alone / NULL); anything else must parse, so a typo
+// is a 400 rather than a date that silently never landed.
+func optionalDate(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return nil, ErrBadInput
+	}
+	return &t, nil
+}
+
+// initialEmployeeStatus is the status a new employee row is created with.
+// Normalised like the update path, defaulting to active when unstated.
+func initialEmployeeStatus(raw string) (string, bool) {
+	status, ok := NormaliseEmployeeStatus(raw)
+	if !ok {
+		return "", false
+	}
+	if status == "" {
+		status = "active"
+	}
+	return status, true
 }
 
 func (s *Store) resolveManagerID(ctx context.Context, managerEmployeeNo string) (*uuid.UUID, error) {
@@ -369,17 +401,17 @@ func (s *Store) CreateEmployee(ctx context.Context, in CreateEmployeeInput) (*Em
 	if empType == "" {
 		empType = "permanent"
 	}
-	var hireDate *time.Time
-	if in.HireDate != "" {
-		if t, err := time.Parse("2006-01-02", in.HireDate); err == nil {
-			hireDate = &t
-		}
+	status, ok := initialEmployeeStatus(in.Status)
+	if !ok {
+		return nil, ErrBadInput
 	}
-	var birthDate *time.Time
-	if in.BirthDate != "" {
-		if t, err := time.Parse("2006-01-02", in.BirthDate); err == nil {
-			birthDate = &t
-		}
+	hireDate, err := optionalDate(in.HireDate)
+	if err != nil {
+		return nil, err
+	}
+	birthDate, err := optionalDate(in.BirthDate)
+	if err != nil {
+		return nil, err
 	}
 	userID, err := parseOptionalUserID(in.UserID)
 	if err != nil {
@@ -392,11 +424,11 @@ func (s *Store) CreateEmployee(ctx context.Context, in CreateEmployeeInput) (*Em
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO erp_employees (employee_no, first_name, last_name, email, phone, department_id,
-		  job_title, employment_type, hire_date, birth_date, plant_code, operator_ref, user_id, manager_id, attrs)
+		  job_title, employment_type, status, hire_date, birth_date, plant_code, operator_ref, user_id, manager_id, attrs)
 		VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,
-		  COALESCE(NULLIF($7,''),''),$8,$9,$10,NULLIF($11,''),NULLIF($12,''),$13,$14,COALESCE($15::jsonb,'{}'))
+		  COALESCE(NULLIF($7,''),''),$8,$9,$10,$11,NULLIF($12,''),NULLIF($13,''),$14,$15,COALESCE($16::jsonb,'{}'))
 		RETURNING id`, in.EmployeeNo, in.FirstName, in.LastName, in.Email, in.Phone, deptID,
-		in.JobTitle, empType, hireDate, birthDate, in.PlantCode, in.OperatorRef, userID, managerID, attrs).Scan(&id)
+		in.JobTitle, empType, status, hireDate, birthDate, in.PlantCode, in.OperatorRef, userID, managerID, attrs).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -409,14 +441,17 @@ func (s *Store) CreateEmployee(ctx context.Context, in CreateEmployeeInput) (*Em
 }
 
 type UpdateEmployeeInput struct {
-	FirstName         string         `json:"first_name"`
-	LastName          string         `json:"last_name"`
-	Email             string         `json:"email"`
-	Phone             string         `json:"phone"`
-	DepartmentCode    string         `json:"department_code"`
-	JobTitle          string         `json:"job_title"`
-	EmploymentType    string         `json:"employment_type"`
-	Status            string         `json:"status"`
+	FirstName      string `json:"first_name"`
+	LastName       string `json:"last_name"`
+	Email          string `json:"email"`
+	Phone          string `json:"phone"`
+	DepartmentCode string `json:"department_code"`
+	JobTitle       string `json:"job_title"`
+	EmploymentType string `json:"employment_type"`
+	Status         string `json:"status"`
+	// Was missing: the HR app's employee form has always sent it and every
+	// edit to a hire date was dropped without a word.
+	HireDate          string         `json:"hire_date"`
 	BirthDate         string         `json:"birth_date"`
 	PlantCode         string         `json:"plant_code"`
 	OperatorRef       string         `json:"operator_ref"`
@@ -448,11 +483,13 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 	if in.Attrs != nil {
 		attrs, _ = json.Marshal(in.Attrs)
 	}
-	var birthDate *time.Time
-	if in.BirthDate != "" {
-		if t, err := time.Parse("2006-01-02", in.BirthDate); err == nil {
-			birthDate = &t
-		}
+	hireDate, err := optionalDate(in.HireDate)
+	if err != nil {
+		return nil, err
+	}
+	birthDate, err := optionalDate(in.BirthDate)
+	if err != nil {
+		return nil, err
 	}
 	userID, err := parseOptionalUserID(in.UserID)
 	if err != nil {
@@ -484,6 +521,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 		  employment_type = COALESCE(NULLIF($8,''), employment_type),
 		  status = COALESCE(NULLIF($9,''), status),
 		  birth_date = COALESCE($10, birth_date),
+		  hire_date = COALESCE($18, hire_date),
 		  plant_code = CASE WHEN $11 = '' THEN plant_code ELSE NULLIF($11,'') END,
 		  operator_ref = CASE WHEN $12 = '' THEN operator_ref ELSE NULLIF($12,'') END,
 		  user_id = CASE WHEN $14 THEN NULL WHEN $13 IS NOT NULL THEN $13 ELSE user_id END,
@@ -493,7 +531,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 		WHERE employee_no = $1`,
 		employeeNo, in.FirstName, in.LastName, in.Email, in.Phone, deptID,
 		in.JobTitle, empType, status, birthDate, in.PlantCode, in.OperatorRef, userID, in.ClearUserID,
-		managerID, in.ClearManager, attrs)
+		managerID, in.ClearManager, attrs, hireDate)
 	if err != nil {
 		return nil, err
 	}
