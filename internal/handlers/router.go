@@ -57,6 +57,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.PATCH("/departments/:code", appmw.RequirePermission("erp.change_employee"), api.UpdateDepartment)
 
 		v1.GET("/employees", appmw.RequirePermission("erp.view_employee"), api.ListEmployees)
+		// Service-readable roster for iag-production's operator registry.
+		v1.GET("/operator-roster", appmw.RequireServiceOrPermission("erp.view_employee"), api.OperatorRoster)
 		v1.GET("/employees/by-operator/:ref", appmw.RequirePermission("erp.view_employee"), api.GetEmployeeByOperatorRef)
 		v1.GET("/employees/by-user/:user_id", appmw.RequirePermission("erp.view_employee"), api.GetEmployeeByUserID)
 		v1.POST("/employees", appmw.RequirePermission("erp.change_employee"), api.CreateEmployee)

@@ -104,3 +104,52 @@ func (s *Store) GetEmployeeByOperatorRef(ctx context.Context, operatorRef string
 		SELECT `+employeeColumns+` `+employeeFrom+` WHERE e.operator_ref = $1`, operatorRef)
 	return scanEmployeeRow(row)
 }
+
+// OperatorRosterRow is what iag-production needs of an employee to keep its
+// operator registry in step with HR: no contact details, no dates, no pay.
+type OperatorRosterRow struct {
+	EmployeeNo  string `json:"employee_no"`
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name"`
+	JobTitle    string `json:"job_title"`
+	Status      string `json:"status"`
+	PlantCode   string `json:"plant_code"`
+	OperatorRef string `json:"operator_ref"`
+}
+
+// ListOperatorRoster returns every employee with a production operator ref
+// — active or not, so a consumer can deactivate the ones who have left.
+// Paged by employee_no for a stable walk.
+func (s *Store) ListOperatorRoster(ctx context.Context, plantCode string, limit, offset int) ([]OperatorRosterRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	q := `SELECT e.employee_no, e.first_name, e.last_name, e.job_title, e.status,
+	             COALESCE(e.plant_code, ''), e.operator_ref
+	      FROM erp_employees e
+	      WHERE e.operator_ref IS NOT NULL AND e.operator_ref <> ''`
+	args := []any{}
+	if plantCode = strings.TrimSpace(plantCode); plantCode != "" {
+		args = append(args, plantCode)
+		q += ` AND e.plant_code = $1`
+	}
+	args = append(args, limit, offset)
+	q += ` ORDER BY e.employee_no LIMIT $` + itoa(len(args)-1) + ` OFFSET $` + itoa(len(args))
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OperatorRosterRow{}
+	for rows.Next() {
+		var r OperatorRosterRow
+		if err := rows.Scan(&r.EmployeeNo, &r.FirstName, &r.LastName, &r.JobTitle, &r.Status, &r.PlantCode, &r.OperatorRef); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

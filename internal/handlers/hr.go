@@ -447,3 +447,17 @@ func (a *API) RunBirthdayReminders(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, result)
 }
+
+// OperatorRoster is the production-facing view of the roster: employees
+// with an operator_ref, the fields iag-production projects into its
+// operator registry, and nothing personal. Open to allow-listed service
+// callers; a person needs erp.view_employee and is not record-scoped
+// because the payload carries nothing HR_SCOPE_ENFORCED protects.
+func (a *API) OperatorRoster(c *gin.Context) {
+	items, err := a.Store.ListOperatorRoster(c.Request.Context(), c.Query("plant"), queryInt(c, "limit", 200), queryInt(c, "offset", 0))
+	if err != nil {
+		writeStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}

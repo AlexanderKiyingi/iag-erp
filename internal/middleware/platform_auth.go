@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"sync"
+	"os"
 	"fmt"
 	"net/http"
 	"strings"
@@ -206,4 +208,47 @@ func (m *PlatformAuth) VerifyBearerToken(tokenStr string) (uuid.UUID, *authclien
 	}
 	userID, _ := uuid.Parse(claims.Subject)
 	return userID, claims, nil
+}
+
+// RequireServiceOrPermission admits a service-account caller (client
+// credentials) on the ERP_SERVICE_CALLERS allow-list, else falls back to the
+// permission check. It is for the few read-only routes another service
+// keeps a projection from — the operator roster for iag-production — and
+// mirrors warehouse's guard on /items. An empty allow-list admits any
+// service caller, as there.
+func RequireServiceOrPermission(code string) gin.HandlerFunc {
+	permGuard := RequirePermission(code)
+	return func(c *gin.Context) {
+		if claims, ok := PlatformClaims(c); ok && claims != nil && claims.IsService() && serviceCallerAllowed(claims.ClientID) {
+			c.Next()
+			return
+		}
+		permGuard(c)
+	}
+}
+
+func serviceCallerAllowed(clientID string) bool {
+	allow := serviceCallerAllowList()
+	if len(allow) == 0 {
+		return true
+	}
+	_, ok := allow[clientID]
+	return ok
+}
+
+var (
+	serviceCallerOnce sync.Once
+	serviceCallerSet  map[string]struct{}
+)
+
+func serviceCallerAllowList() map[string]struct{} {
+	serviceCallerOnce.Do(func() {
+		serviceCallerSet = map[string]struct{}{}
+		for _, id := range strings.Split(os.Getenv("ERP_SERVICE_CALLERS"), ",") {
+			if t := strings.TrimSpace(id); t != "" {
+				serviceCallerSet[t] = struct{}{}
+			}
+		}
+	})
+	return serviceCallerSet
 }
