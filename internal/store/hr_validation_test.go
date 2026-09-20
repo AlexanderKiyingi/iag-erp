@@ -123,3 +123,42 @@ func TestHRModuleWriteErrClassifiesTheConstraintViolation(t *testing.T) {
 		t.Error("nil must stay nil")
 	}
 }
+
+// The HR app has always sent hire_date on PATCH /employees/:no and status on
+// POST /employees; neither field existed on its input struct, so an edited
+// hire date was dropped and a new hire on probation landed as active. Both
+// are pinned here at the helper level, since the store tests run without a
+// database.
+func TestOptionalDate(t *testing.T) {
+	if d, err := optionalDate(""); err != nil || d != nil {
+		t.Fatalf("empty: d=%v err=%v", d, err)
+	}
+	if d, err := optionalDate("  "); err != nil || d != nil {
+		t.Fatalf("blank: d=%v err=%v", d, err)
+	}
+	if _, err := optionalDate("2026-13-40"); err != ErrBadInput {
+		t.Fatalf("garbage should be rejected, not silently dropped: err=%v", err)
+	}
+	if _, err := optionalDate("20/09/2026"); err != ErrBadInput {
+		t.Fatalf("wrong layout should be rejected: err=%v", err)
+	}
+	d, err := optionalDate("2026-09-20")
+	if err != nil || d == nil || d.Format("2006-01-02") != "2026-09-20" {
+		t.Fatalf("valid: d=%v err=%v", d, err)
+	}
+}
+
+func TestInitialEmployeeStatus(t *testing.T) {
+	if s, ok := initialEmployeeStatus(""); !ok || s != "active" {
+		t.Fatalf("unstated should default to active: s=%q ok=%v", s, ok)
+	}
+	if s, ok := initialEmployeeStatus("Probation"); !ok || s != "probation" {
+		t.Fatalf("the app's label should normalise: s=%q ok=%v", s, ok)
+	}
+	if s, ok := initialEmployeeStatus("On leave"); !ok || s != "on_leave" {
+		t.Fatalf("spaced label should normalise: s=%q ok=%v", s, ok)
+	}
+	if _, ok := initialEmployeeStatus("promoted"); ok {
+		t.Fatal("an unknown status must be refused, not stored")
+	}
+}

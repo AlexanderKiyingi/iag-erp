@@ -501,3 +501,55 @@ func TestSeededTaxBandsLoadAndCompute(t *testing.T) {
 		t.Error("no NSSF rate is effective today; migration 010 has not seeded it")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: every employee edit answered 500
+// ---------------------------------------------------------------------------
+
+// Found by the HR app's live run on 2026-09-20: PATCH /employees/:no failed
+// with "internal error" for any body at all — a phone number, a status. The
+// create path was fine. What differs is how the optional links are written:
+// INSERT infers each parameter's type from its column, while the UPDATE's
+// `CASE WHEN $n IS NOT NULL THEN $n ELSE col END` gives Postgres nothing to
+// infer a nil pointer's type from.
+func TestUpdateEmployeeWithOnlyAPhoneSucceeds(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	emp := f.newEmployee("PATCHME", "")
+
+	updated, err := f.store.UpdateEmployee(ctx, emp.EmployeeNo, UpdateEmployeeInput{Phone: "0700000001"})
+	if err != nil {
+		t.Fatalf("a phone-only update must succeed: %v", err)
+	}
+	if updated.Phone == nil || *updated.Phone != "0700000001" {
+		t.Fatalf("phone not stored: %v", updated.Phone)
+	}
+
+	// The two fields the HR app now sends on every save.
+	updated, err = f.store.UpdateEmployee(ctx, emp.EmployeeNo, UpdateEmployeeInput{
+		Status:   "terminated",
+		HireDate: "2026-08-15",
+	})
+	if err != nil {
+		t.Fatalf("status + hire date update: %v", err)
+	}
+	if updated.Status != "terminated" {
+		t.Fatalf("status=%q", updated.Status)
+	}
+	if updated.HireDate == nil || updated.HireDate.Format("2006-01-02") != "2026-08-15" {
+		t.Fatalf("hire_date not stored: %v", updated.HireDate)
+	}
+
+	// Clearing a link must reach the row, and setting one must too.
+	mgr := f.newEmployee("PATCHMGR", "")
+	if _, err := f.store.UpdateEmployee(ctx, emp.EmployeeNo, UpdateEmployeeInput{ManagerEmployeeNo: mgr.EmployeeNo}); err != nil {
+		t.Fatalf("set manager: %v", err)
+	}
+	updated, err = f.store.UpdateEmployee(ctx, emp.EmployeeNo, UpdateEmployeeInput{ClearManager: true})
+	if err != nil {
+		t.Fatalf("clear manager: %v", err)
+	}
+	if updated.ManagerEmployeeNo != nil {
+		t.Fatalf("manager still %q after clear", *updated.ManagerEmployeeNo)
+	}
+}
