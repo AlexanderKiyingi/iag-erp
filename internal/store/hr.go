@@ -520,12 +520,15 @@ func (s *Store) UpdateEmployee(ctx context.Context, employeeNo string, in Update
 		  job_title = COALESCE(NULLIF($7,''), job_title),
 		  employment_type = COALESCE(NULLIF($8,''), employment_type),
 		  status = COALESCE(NULLIF($9,''), status),
-		  birth_date = COALESCE($10, birth_date),
-		  hire_date = COALESCE($18, hire_date),
+		  birth_date = COALESCE($10::date, birth_date),
+		  hire_date = COALESCE($18::date, hire_date),
 		  plant_code = CASE WHEN $11 = '' THEN plant_code ELSE NULLIF($11,'') END,
 		  operator_ref = CASE WHEN $12 = '' THEN operator_ref ELSE NULLIF($12,'') END,
-		  user_id = CASE WHEN $14 THEN NULL WHEN $13 IS NOT NULL THEN $13 ELSE user_id END,
-		  manager_id = CASE WHEN $16 THEN NULL WHEN $15 IS NOT NULL THEN $15 ELSE manager_id END,
+		  -- Cast, because a CASE gives Postgres nothing to infer a nil
+		  -- parameter's type from: "could not determine data type of
+		  -- parameter $13" was every employee edit for a week.
+		  user_id = CASE WHEN $14::boolean THEN NULL WHEN $13::uuid IS NOT NULL THEN $13::uuid ELSE user_id END,
+		  manager_id = CASE WHEN $16::boolean THEN NULL WHEN $15::uuid IS NOT NULL THEN $15::uuid ELSE manager_id END,
 		  attrs = COALESCE($17::jsonb, attrs),
 		  updated_at = NOW()
 		WHERE employee_no = $1`,
