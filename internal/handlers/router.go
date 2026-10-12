@@ -149,6 +149,9 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		v1.GET("/training/courses", appmw.RequirePermission("erp.view_training"), api.ListCourses)
 		v1.POST("/training/courses", appmw.RequirePermission("erp.change_training"), api.CreateCourse)
 		v1.GET("/training/enrolments", appmw.RequirePermission("erp.view_training"), api.ListEnrolments)
+		// Who is qualified for which quality-control lab method (026).
+		v1.GET("/training/qualifications", appmw.RequireServiceOrPermission("erp.view_training"), api.ListQualifications)
+		v1.PUT("/training/courses/:code/qualifies-for", appmw.RequirePermission("erp.change_training"), api.SetCourseQualifiesFor)
 		v1.POST("/training/enrolments", appmw.RequirePermission("erp.change_training"), api.Enrol)
 		v1.PATCH("/training/enrolments/:id", appmw.RequirePermission("erp.change_training"), api.UpdateEnrolment)
 

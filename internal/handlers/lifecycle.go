@@ -759,3 +759,42 @@ func (a *API) UpdateEnrolment(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, item)
 }
+
+// ListQualifications answers quality-control's question — who is trained for
+// which lab method — for a person (email, user_id, employee_no) or a method.
+// Service tokens are let in (RequireServiceOrPermission): QC asks at the
+// moment a result is recorded, not on anyone's behalf.
+func (a *API) ListQualifications(c *gin.Context) {
+	items, err := a.Store.Qualifications(c.Request.Context(), store.QualificationFilter{
+		Method:     c.Query("method"),
+		EmployeeNo: c.Query("employee_no"),
+		Email:      c.Query("email"),
+		UserID:     c.Query("user_id"),
+	})
+	if err != nil {
+		writeStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
+}
+
+// SetCourseQualifiesFor names the lab methods a course qualifies its holders
+// to run.
+func (a *API) SetCourseQualifiesFor(c *gin.Context) {
+	if !a.requireUnrestricted(c) {
+		return
+	}
+	var body struct {
+		QualifiesFor []string `json:"qualifies_for"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item, err := a.Store.SetCourseQualifiesFor(c.Request.Context(), c.Param("code"), body.QualifiesFor)
+	if err != nil {
+		writeStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
