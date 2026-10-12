@@ -28,6 +28,9 @@ type TrainingCourse struct {
 	ValidityMonths *int      `json:"validity_months,omitempty"`
 	Active         bool      `json:"active"`
 	CreatedAt      time.Time `json:"created_at"`
+	// QualifiesFor lists the quality-control lab methods a completed,
+	// unexpired enrolment qualifies its holder to run (migration 026).
+	QualifiesFor []string `json:"qualifies_for"`
 }
 
 type TrainingEnrolment struct {
@@ -50,13 +53,14 @@ type TrainingEnrolment struct {
 }
 
 type UpsertCourseInput struct {
-	Code           string  `json:"code"`
-	Name           string  `json:"name"`
-	Provider       string  `json:"provider"`
-	Description    string  `json:"description"`
-	DurationHours  float64 `json:"duration_hours"`
-	Mandatory      bool    `json:"mandatory"`
-	ValidityMonths *int    `json:"validity_months"`
+	Code           string   `json:"code"`
+	Name           string   `json:"name"`
+	Provider       string   `json:"provider"`
+	Description    string   `json:"description"`
+	DurationHours  float64  `json:"duration_hours"`
+	Mandatory      bool     `json:"mandatory"`
+	ValidityMonths *int     `json:"validity_months"`
+	QualifiesFor   []string `json:"qualifies_for"`
 }
 
 func (s *Store) CreateCourse(ctx context.Context, in UpsertCourseInput) (*TrainingCourse, error) {
@@ -70,10 +74,10 @@ func (s *Store) CreateCourse(ctx context.Context, in UpsertCourseInput) (*Traini
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO erp_training_courses
-			(code, name, provider, description, duration_hours, mandatory, validity_months)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+			(code, name, provider, description, duration_hours, mandatory, validity_months, qualifies_for)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
 		code, in.Name, in.Provider, in.Description, in.DurationHours,
-		in.Mandatory, in.ValidityMonths).Scan(&id)
+		in.Mandatory, in.ValidityMonths, cleanMethods(in.QualifiesFor)).Scan(&id)
 	if err != nil {
 		if strings.Contains(err.Error(), "erp_training_courses_code_key") {
 			return nil, ErrConflict
@@ -87,10 +91,10 @@ func (s *Store) GetCourse(ctx context.Context, id uuid.UUID) (*TrainingCourse, e
 	var c TrainingCourse
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, code, name, provider, description, duration_hours, mandatory,
-		       validity_months, active, created_at
+		       validity_months, active, created_at, qualifies_for
 		FROM erp_training_courses WHERE id = $1`, id).
 		Scan(&c.ID, &c.Code, &c.Name, &c.Provider, &c.Description, &c.DurationHours,
-			&c.Mandatory, &c.ValidityMonths, &c.Active, &c.CreatedAt)
+			&c.Mandatory, &c.ValidityMonths, &c.Active, &c.CreatedAt, &c.QualifiesFor)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -102,7 +106,7 @@ func (s *Store) GetCourse(ctx context.Context, id uuid.UUID) (*TrainingCourse, e
 
 func (s *Store) ListCourses(ctx context.Context, mandatoryOnly bool) ([]TrainingCourse, error) {
 	q := `SELECT id, code, name, provider, description, duration_hours, mandatory,
-	             validity_months, active, created_at
+	             validity_months, active, created_at, qualifies_for
 	      FROM erp_training_courses WHERE active = true`
 	if mandatoryOnly {
 		q += ` AND mandatory = true`
@@ -118,7 +122,7 @@ func (s *Store) ListCourses(ctx context.Context, mandatoryOnly bool) ([]Training
 	for rows.Next() {
 		var c TrainingCourse
 		if err := rows.Scan(&c.ID, &c.Code, &c.Name, &c.Provider, &c.Description,
-			&c.DurationHours, &c.Mandatory, &c.ValidityMonths, &c.Active, &c.CreatedAt); err != nil {
+			&c.DurationHours, &c.Mandatory, &c.ValidityMonths, &c.Active, &c.CreatedAt, &c.QualifiesFor); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
